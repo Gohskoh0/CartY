@@ -41,20 +41,25 @@ export default function Wallet() {
   const [accountName, setAccountName] = useState('');
   const [accountVerifyError, setAccountVerifyError] = useState('');
 
+  const fetchBanks = async (country: string) => {
+    try {
+      const banksData = await api.getBanks(country);
+      if (Array.isArray(banksData) && banksData.length > 0) {
+        setBanks(banksData);
+        setFilteredBanks(banksData);
+      }
+    } catch (error) {
+      console.log('Banks fetch error:', error);
+    }
+  };
+
   const fetchWallet = async () => {
     try {
-      const country = user?.country || 'NG';
-      const [walletData, banksData] = await Promise.all([
-        api.getWallet(),
-        api.getBanks(country),
-      ]);
+      const walletData = await api.getWallet();
       setWallet(walletData);
-      setBanks(banksData);
-      setFilteredBanks(banksData);
     } catch (error: any) {
       const msg = error?.message?.toLowerCase() || '';
       if (msg.includes('store not found') || msg.includes('404')) {
-        // Store doesn't exist yet, wallet will show empty
         setWallet({ wallet_balance: 0, pending_balance: 0, total_earnings: 0 });
       }
       console.log('Wallet error:', error);
@@ -68,10 +73,17 @@ export default function Wallet() {
     fetchWallet();
   }, []);
 
+  useEffect(() => {
+    const country = user?.country || 'NG';
+    fetchBanks(country);
+  }, [user?.country]);
+
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    const country = user?.country || 'NG';
     fetchWallet();
-  }, []);
+    fetchBanks(country);
+  }, [user?.country]);
 
   // Filter banks when search text changes
   useEffect(() => {
@@ -263,7 +275,7 @@ export default function Wallet() {
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Withdrawal History</Text>
           {wallet?.withdrawals?.length > 0 ? (
             wallet.withdrawals.map((w: any) => (
-              <View key={w._id} style={[styles.withdrawalCard, { backgroundColor: colors.surface }]}>
+              <View key={w.id} style={[styles.withdrawalCard, { backgroundColor: colors.surface }]}>
                 <View>
                   <Text style={[styles.withdrawalAmount, { color: colors.text }]}>
                     ₦{(w.amount || 0).toLocaleString()}
