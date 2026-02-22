@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(npx expo start --tunnel)",
+      "Bash(cmd /c:*)",
+      "Bash(powershell -NonInteractive -Command \"Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object LocalPort, State, OwningProcess\")"
+    ]
+  }
+}
