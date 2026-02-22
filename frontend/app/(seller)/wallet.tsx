@@ -19,9 +19,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../../src/services/api';
 import { useTheme } from '../../src/context/ThemeContext';
+import { useAuth } from '../../src/context/AuthContext';
 
 export default function Wallet() {
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [wallet, setWallet] = useState<any>(null);
   const [banks, setBanks] = useState<any[]>([]);
   const [filteredBanks, setFilteredBanks] = useState<any[]>([]);
@@ -41,14 +43,20 @@ export default function Wallet() {
 
   const fetchWallet = async () => {
     try {
+      const country = user?.country || 'NG';
       const [walletData, banksData] = await Promise.all([
         api.getWallet(),
-        api.getBanks('NG'),
+        api.getBanks(country),
       ]);
       setWallet(walletData);
       setBanks(banksData);
       setFilteredBanks(banksData);
-    } catch (error) {
+    } catch (error: any) {
+      const msg = error?.message?.toLowerCase() || '';
+      if (msg.includes('store not found') || msg.includes('404')) {
+        // Store doesn't exist yet, wallet will show empty
+        setWallet({ wallet_balance: 0, pending_balance: 0, total_earnings: 0 });
+      }
       console.log('Wallet error:', error);
     } finally {
       setLoading(false);

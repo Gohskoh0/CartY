@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, Request
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -361,7 +362,7 @@ async def get_storefront(slug: str):
     }
 
 @api_router.post("/storefront/{slug}/checkout")
-async def checkout(slug: str, data: CheckoutRequest, background_tasks: BackgroundTasks):
+async def checkout(slug: str, data: CheckoutRequest, background_tasks: BackgroundTasks, request: Request):
     store = one(await db(lambda: supabase.table('stores').select('*').eq('slug', slug).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
@@ -390,7 +391,8 @@ async def checkout(slug: str, data: CheckoutRequest, background_tasks: Backgroun
             resp = await client.post(
                 "https://api.paystack.co/transaction/initialize",
                 headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
-                json={"email": f"{data.buyer_phone}@carty.store", "amount": int(total_amount * 100), "reference": reference}
+                json={"email": f"{data.buyer_phone}@carty.store", "amount": int(total_amount * 100), "reference": reference,
+                      "callback_url": f"{str(request.base_url).rstrip('/')}/store/{slug}/payment"}
             )
             pdata = resp.json()
             if not pdata.get("status"):
@@ -670,6 +672,224 @@ async def paystack_webhook(request: Request):
             await db(lambda: supabase.table('withdrawals').update({"status": "failed"}).eq('reference', ref).execute())
 
     return {"status": "ok"}
+
+
+# ================== WEB STOREFRONT ==================
+
+STOREFRONT_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Store | CartY</title>
+  <style>
+    *{{margin:0;padding:0;box-sizing:border-box}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f9fafb;color:#111827}}
+    .header{{background:#fff;padding:14px 18px;display:flex;align-items:center;gap:12px;box-shadow:0 1px 4px rgba(0,0,0,.1);position:sticky;top:0;z-index:10}}
+    .logo-placeholder{{width:46px;height:46px;border-radius:12px;background:#EEF2FF;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#4F46E5;flex-shrink:0}}
+    .logo-img{{width:46px;height:46px;border-radius:12px;object-fit:cover;flex-shrink:0}}
+    .store-name{{font-size:18px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+    .cart-btn{{background:#4F46E5;color:#fff;border:none;border-radius:50%;width:44px;height:44px;cursor:pointer;font-size:20px;position:relative;flex-shrink:0;display:flex;align-items:center;justify-content:center}}
+    .cart-badge{{position:absolute;top:-5px;right:-5px;background:#EF4444;color:#fff;border-radius:50%;width:18px;height:18px;font-size:10px;font-weight:700;display:none;align-items:center;justify-content:center}}
+    .inactive-banner{{background:#FEF2F2;color:#B91C1C;padding:10px 18px;text-align:center;font-size:13px}}
+    .grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;padding:14px}}
+    @media(min-width:600px){{.grid{{grid-template-columns:repeat(3,1fr)}}}}
+    @media(min-width:900px){{.grid{{grid-template-columns:repeat(4,1fr)}}}}
+    .card{{background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}}
+    .prod-img{{width:100%;aspect-ratio:1;object-fit:cover}}
+    .prod-ph{{width:100%;aspect-ratio:1;background:#F3F4F6;display:flex;align-items:center;justify-content:center;font-size:40px}}
+    .prod-body{{padding:10px}}
+    .prod-name{{font-size:13px;font-weight:600;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}}
+    .prod-price{{font-size:15px;font-weight:700;color:#4F46E5;margin-top:3px}}
+    .prod-desc{{font-size:11px;color:#6B7280;margin-top:3px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}}
+    .add-btn{{width:100%;padding:9px;background:#4F46E5;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;border-radius:0 0 12px 12px}}
+    .add-btn:active{{background:#4338CA}}
+    .overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50}}
+    .overlay.open{{display:flex;align-items:flex-end}}
+    .sheet{{background:#fff;border-radius:22px 22px 0 0;width:100%;max-height:90vh;overflow-y:auto;padding:20px}}
+    .sheet-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}}
+    .sheet-title{{font-size:19px;font-weight:700}}
+    .close-btn{{background:none;border:none;font-size:22px;cursor:pointer;color:#9CA3AF;padding:4px}}
+    .ci{{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid #F3F4F6}}
+    .ci-name{{flex:1;font-size:14px;font-weight:500}}
+    .ci-price{{font-size:13px;color:#4F46E5;font-weight:600;white-space:nowrap}}
+    .qty-btn{{background:#EEF2FF;color:#4F46E5;border:none;width:28px;height:28px;border-radius:50%;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center}}
+    .qty-n{{font-size:14px;font-weight:600;min-width:18px;text-align:center}}
+    .total-row{{display:flex;justify-content:space-between;padding:14px 0;border-top:2px solid #E5E7EB;font-size:17px;font-weight:700}}
+    .divider{{border:none;border-top:1px solid #E5E7EB;margin:14px 0}}
+    .sec-title{{font-size:15px;font-weight:700;margin-bottom:10px}}
+    .fg{{margin-bottom:10px}}
+    label{{font-size:12px;font-weight:600;color:#374151;margin-bottom:5px;display:block}}
+    input,textarea{{width:100%;padding:11px 13px;border:1.5px solid #E5E7EB;border-radius:10px;font-size:15px;color:#111827;background:#F9FAFB;outline:none;font-family:inherit}}
+    input:focus,textarea:focus{{border-color:#4F46E5;background:#fff}}
+    textarea{{resize:none}}
+    .pay-btn{{width:100%;padding:15px;background:#4F46E5;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-top:6px}}
+    .pay-btn:disabled{{background:#A5B4FC;cursor:not-allowed}}
+    .pay-btn:active{{background:#4338CA}}
+    .loader{{text-align:center;padding:60px 20px}}
+    .spinner{{width:38px;height:38px;border:4px solid #EEF2FF;border-top-color:#4F46E5;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 14px}}
+    @keyframes spin{{to{{transform:rotate(360deg)}}}}
+    .empty{{text-align:center;padding:60px 20px;color:#6B7280}}
+    .footer{{text-align:center;color:#9CA3AF;font-size:11px;padding:20px}}
+  </style>
+</head>
+<body>
+  <div id="app"><div class="loader"><div class="spinner"></div><p style="color:#6B7280">Loading...</p></div></div>
+  <div class="overlay" id="overlay">
+    <div class="sheet">
+      <div class="sheet-header"><span class="sheet-title">Your Cart</span><button class="close-btn" onclick="closeCart()">&#x2715;</button></div>
+      <div id="cartItems"></div>
+      <div class="total-row"><span>Total</span><span id="cartTotal">&#x20A6;0</span></div>
+      <hr class="divider">
+      <div class="sec-title">Delivery Details</div>
+      <div class="fg"><label>Full Name *</label><input id="bName" type="text" placeholder="Your full name"></div>
+      <div class="fg"><label>Phone Number *</label><input id="bPhone" type="tel" placeholder="Your phone number"></div>
+      <div class="fg"><label>Delivery Address *</label><textarea id="bAddr" rows="2" placeholder="Your delivery address"></textarea></div>
+      <div class="fg"><label>Note (optional)</label><input id="bNote" type="text" placeholder="Any special instructions?"></div>
+      <button class="pay-btn" id="payBtn" onclick="doCheckout()">Proceed to Payment</button>
+    </div>
+  </div>
+  <script>
+    var SLUG='{slug}',BASE='{base_url}',store=null,prods=[],cart={{}};
+    function N(n){{return'\\u20A6'+Number(n).toLocaleString()}}
+    async function load(){{
+      try{{
+        var r=await fetch(BASE+'/api/storefront/'+SLUG);
+        if(!r.ok)throw new Error();
+        var d=await r.json();store=d.store;prods=d.products;render();
+      }}catch(e){{document.getElementById('app').innerHTML='<div class="empty"><p style="font-size:40px">&#128683;</p><p style="font-weight:600;margin-top:12px">Store not found</p></div>';}}
+    }}
+    function render(){{
+      var logo=store.logo?'<img class="logo-img" src="'+store.logo+'" alt="logo">'
+        :'<div class="logo-placeholder">'+store.name.charAt(0).toUpperCase()+'</div>';
+      var inactive=store.subscription_status!=='active';
+      var h='<div class="header">'+logo+'<span class="store-name">'+esc(store.name)+'</span>'
+        +'<button class="cart-btn" onclick="openCart()">&#x1F6D2;<span class="cart-badge" id="cb">0</span></button></div>';
+      if(inactive)h+='<div class="inactive-banner">&#9888;&#65039; This store is not currently accepting online payments.</div>';
+      if(prods.length===0){{h+='<div class="empty"><p style="font-size:40px">&#128230;</p><p style="font-weight:600;margin-top:12px">No products yet</p></div>';}}
+      else{{
+        h+='<div class="grid">';
+        prods.forEach(function(p){{
+          var img=p.image?'<img class="prod-img" src="'+p.image+'" alt="'+esc(p.name)+'">'
+            :'<div class="prod-ph">&#x1F6CD;&#xFE0F;</div>';
+          h+='<div class="card">'+img+'<div class="prod-body"><div class="prod-name">'+esc(p.name)+'</div>'
+            +'<div class="prod-price">'+N(p.price)+'</div>'
+            +(p.description?'<div class="prod-desc">'+esc(p.description)+'</div>':'')
+            +'</div><button class="add-btn" onclick="add(\''+p.id+'\')">Add to Cart</button></div>';
+        }});
+        h+='</div>';
+      }}
+      h+='<div class="footer">Powered by CartY</div>';
+      document.getElementById('app').innerHTML=h;
+      updateUI();
+    }}
+    function esc(s){{return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}}
+    function add(id){{
+      cart[id]=(cart[id]||0)+1;updateUI();
+      var b=document.querySelector('[onclick="add(\''+id+'\')"]');
+      if(b){{b.textContent='\\u2713 Added!';setTimeout(function(){{b.textContent='Add to Cart'}},1000);}}
+    }}
+    function chQty(id,d){{cart[id]=(cart[id]||0)+d;if(cart[id]<=0)delete cart[id];updateUI();}}
+    function updateUI(){{
+      var tot=0,cnt=0;
+      Object.keys(cart).forEach(function(id){{var p=prods.find(function(x){{return x.id===id}});if(p){{tot+=p.price*cart[id];cnt+=cart[id];}}}});
+      var cb=document.getElementById('cb');
+      if(cb){{cb.style.display=cnt>0?'flex':'none';cb.textContent=cnt;}}
+      var te=document.getElementById('cartTotal');if(te)te.textContent=N(tot);
+      var ci=document.getElementById('cartItems');if(!ci)return;
+      if(cnt===0){{ci.innerHTML='<p style="color:#9CA3AF;text-align:center;padding:18px 0">Cart is empty</p>';return;}}
+      ci.innerHTML=Object.keys(cart).map(function(id){{
+        var p=prods.find(function(x){{return x.id===id}});if(!p)return'';
+        return'<div class="ci"><span class="ci-name">'+esc(p.name)+'</span>'
+          +'<button class="qty-btn" onclick="chQty(\''+id+'\',-1)">-</button>'
+          +'<span class="qty-n">'+cart[id]+'</span>'
+          +'<button class="qty-btn" onclick="chQty(\''+id+'\',1)">+</button>'
+          +'<span class="ci-price">'+N(p.price*cart[id])+'</span></div>';
+      }}).join('');
+    }}
+    function openCart(){{document.getElementById('overlay').classList.add('open');updateUI();}}
+    function closeCart(){{document.getElementById('overlay').classList.remove('open');}}
+    document.addEventListener('DOMContentLoaded',function(){{
+      document.getElementById('overlay').addEventListener('click',function(e){{if(e.target===this)closeCart();}});
+    }});
+    async function doCheckout(){{
+      var name=document.getElementById('bName').value.trim();
+      var phone=document.getElementById('bPhone').value.trim();
+      var addr=document.getElementById('bAddr').value.trim();
+      var note=document.getElementById('bNote').value.trim();
+      if(!name||!phone||!addr){{alert('Please fill in Name, Phone and Address');return;}}
+      if(!Object.keys(cart).length){{alert('Your cart is empty');return;}}
+      var btn=document.getElementById('payBtn');btn.disabled=true;btn.textContent='Processing...';
+      try{{
+        var items=Object.keys(cart).map(function(id){{return{{product_id:id,quantity:cart[id]}}}});
+        var r=await fetch(BASE+'/api/storefront/'+SLUG+'/checkout',{{
+          method:'POST',headers:{{'Content-Type':'application/json'}},
+          body:JSON.stringify({{buyer_name:name,buyer_phone:phone,buyer_address:addr,buyer_note:note||undefined,cart_items:items}})
+        }});
+        var d=await r.json();
+        if(d.status==='subscription_required'){{alert('This store is not accepting payments. Contact seller via WhatsApp.');btn.disabled=false;btn.textContent='Proceed to Payment';return;}}
+        if(d.authorization_url){{window.location.href=d.authorization_url;}}
+        else{{throw new Error('Payment initialization failed');}}
+      }}catch(e){{alert('Error: '+e.message);btn.disabled=false;btn.textContent='Proceed to Payment';}}
+    }}
+    load();
+  </script>
+</body>
+</html>"""
+
+PAYMENT_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment | CartY</title>
+  <style>
+    *{{margin:0;padding:0;box-sizing:border-box}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f9fafb;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}}
+    .card{{background:#fff;border-radius:20px;padding:40px 28px;max-width:400px;width:100%;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.08)}}
+    .icon{{font-size:64px;margin-bottom:14px}}
+    h1{{font-size:22px;font-weight:700;margin-bottom:8px}}
+    p{{font-size:14px;color:#6B7280;margin-bottom:24px;line-height:1.5}}
+    a{{display:inline-block;padding:14px 28px;background:#4F46E5;color:#fff;border-radius:12px;text-decoration:none;font-weight:600;font-size:15px}}
+    .spinner{{width:36px;height:36px;border:4px solid #EEF2FF;border-top-color:#4F46E5;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 14px}}
+    @keyframes spin{{to{{transform:rotate(360deg)}}}}
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="spinner"></div>
+    <p>Verifying your payment...</p>
+  </div>
+  <script>
+    var SLUG='{slug}',REF='{reference}',BASE='{base_url}';
+    async function verify(){{
+      if(!REF){{show('&#9888;&#65039;','Invalid Link','No payment reference found.','Back to Store');return;}}
+      try{{
+        var r=await fetch(BASE+'/api/storefront/'+SLUG+'/verify/'+REF);
+        var d=await r.json();
+        if(d.status==='success'){{show('&#x2705;','Payment Successful!','Thank you! The seller will contact you soon.','Continue Shopping');}}
+        else{{show('&#x274C;','Payment Failed',d.message||'Something went wrong. Please try again.','Try Again');}}
+      }}catch(e){{show('&#x274C;','Error',e.message||'Could not verify payment.','Try Again');}}
+    }}
+    function show(icon,title,msg,btn){{
+      document.getElementById('card').innerHTML='<div class="icon">'+icon+'</div><h1>'+title+'</h1><p>'+msg+'</p>'
+        +'<a href="'+BASE+'/store/'+SLUG+'">'+btn+'</a>';
+    }}
+    verify();
+  </script>
+</body>
+</html>"""
+
+@app.get("/store/{slug}", response_class=HTMLResponse)
+async def storefront_page(slug: str, request: Request):
+    base_url = str(request.base_url).rstrip('/')
+    return HTMLResponse(STOREFRONT_HTML.format(slug=slug, base_url=base_url))
+
+@app.get("/store/{slug}/payment", response_class=HTMLResponse)
+async def payment_page(slug: str, request: Request, reference: str = '', trxref: str = ''):
+    ref = reference or trxref
+    base_url = str(request.base_url).rstrip('/')
+    return HTMLResponse(PAYMENT_HTML.format(slug=slug, reference=ref, base_url=base_url))
 
 
 # ================== ROOT ==================

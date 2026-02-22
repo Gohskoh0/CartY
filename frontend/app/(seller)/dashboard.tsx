@@ -27,11 +27,22 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  useEffect(() => {
+    if (user && !user.has_store) {
+      router.replace('/(seller)/create-store');
+    }
+  }, [user]);
+
   const fetchDashboard = async () => {
     try {
       const data = await api.getDashboard();
       setDashboard(data);
-    } catch (error) {
+    } catch (error: any) {
+      const msg = error?.message?.toLowerCase() || '';
+      if (msg.includes('store not found') || msg.includes('404')) {
+        router.replace('/(seller)/create-store');
+        return;
+      }
       console.log('Dashboard error:', error);
     } finally {
       setLoading(false);
@@ -136,7 +147,7 @@ export default function Dashboard() {
               <View style={styles.bannerText}>
                 <Text style={styles.bannerTitle}>Activate Your Store</Text>
                 <Text style={styles.bannerSubtitle}>
-                  Subscribe for ₦37,500/month to start accepting payments
+                  Subscribe for ₦7,500/month to start accepting payments
                 </Text>
               </View>
             </View>
@@ -213,7 +224,7 @@ export default function Dashboard() {
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Orders</Text>
           {dashboard?.recent_orders?.length > 0 ? (
             dashboard.recent_orders.map((order: any) => (
-              <View key={order._id} style={[styles.orderCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <View key={order.id} style={[styles.orderCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                 <View style={styles.orderHeader}>
                   <Text style={[styles.orderBuyer, { color: colors.text }]}>{order.buyer_name}</Text>
                   <View

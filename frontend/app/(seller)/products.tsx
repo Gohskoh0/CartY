@@ -10,16 +10,19 @@ import {
   ActivityIndicator,
   Image,
   Switch,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../../src/services/api';
 import { useTheme } from '../../src/context/ThemeContext';
+import { useAuth } from '../../src/context/AuthContext';
 
 export default function Products() {
   const router = useRouter();
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -47,10 +50,10 @@ export default function Products() {
 
   const toggleProductActive = async (product: any) => {
     try {
-      await api.updateProduct(product._id, { is_active: !product.is_active });
+      await api.updateProduct(product.id, { is_active: !product.is_active });
       setProducts(
         products.map((p) =>
-          p._id === product._id ? { ...p, is_active: !p.is_active } : p
+          p.id === product.id ? { ...p, is_active: !p.is_active } : p
         )
       );
     } catch (error: any) {
@@ -70,7 +73,7 @@ export default function Products() {
           onPress: async () => {
             try {
               await api.deleteProduct(productId);
-              setProducts(products.filter((p) => p._id !== productId));
+              setProducts(products.filter((p) => p.id !== productId));
             } catch (error: any) {
               Alert.alert('Error', error.message);
             }
@@ -78,6 +81,24 @@ export default function Products() {
         },
       ]
     );
+  };
+
+  const shareProduct = async (product: any) => {
+    const storeSlug = user?.store_slug;
+    if (!storeSlug) {
+      Alert.alert('Error', 'Store not set up yet');
+      return;
+    }
+    const baseUrl = process.env.EXPO_PUBLIC_BACKEND_URL || '';
+    const url = `${baseUrl}/store/${storeSlug}`;
+    try {
+      await Share.share({
+        message: `🛍️ ${product.name}\n💰 ₦${Number(product.price).toLocaleString()}\n${product.description ? `\n${product.description}\n` : ''}\nOrder here 👉 ${url}`,
+        title: product.name,
+      });
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
   };
 
   if (loading) {
@@ -111,7 +132,7 @@ export default function Products() {
       >
         {products.length > 0 ? (
           products.map((product) => (
-            <View key={product._id} style={styles.productCard}>
+            <View key={product.id} style={styles.productCard}>
               {product.image ? (
                 <Image source={{ uri: product.image }} style={styles.productImage} />
               ) : (
@@ -119,7 +140,7 @@ export default function Products() {
                   <Ionicons name="image-outline" size={32} color="#D1D5DB" />
                 </View>
               )}
-              
+
               <View style={styles.productInfo}>
                 <Text style={styles.productName}>{product.name}</Text>
                 <Text style={styles.productPrice}>
@@ -145,10 +166,16 @@ export default function Products() {
                   />
                 </View>
                 <TouchableOpacity
-                  style={styles.deleteButton}
-                  onPress={() => deleteProduct(product._id)}
+                  style={styles.shareIconButton}
+                  onPress={() => shareProduct(product)}
                 >
-                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                  <Ionicons name="share-social-outline" size={18} color="#4F46E5" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.deleteButton}
+                  onPress={() => deleteProduct(product.id)}
+                >
+                  <Ionicons name="trash-outline" size={18} color="#EF4444" />
                 </TouchableOpacity>
               </View>
             </View>
@@ -263,10 +290,19 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     marginBottom: 4,
   },
+  shareIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
   deleteButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: '#FEE2E2',
     alignItems: 'center',
     justifyContent: 'center',
