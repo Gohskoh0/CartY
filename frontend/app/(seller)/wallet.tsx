@@ -16,9 +16,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../../src/services/api';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
+
+const PIN_KEY = '@carty_wallet_pin';
 
 export default function Wallet() {
   const { colors } = useTheme();
@@ -68,6 +71,17 @@ export default function Wallet() {
   // which modal the bank picker should return to: 'setup' | 'transfer'
   const [pickerContext, setPickerContext] = useState<'setup' | 'transfer'>('setup');
 
+  // PIN security
+  const [pinExists, setPinExists] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinDigits, setPinDigits] = useState('');
+  const [pinStep, setPinStep] = useState<'verify' | 'create' | 'confirm_create'>('verify');
+  const [pinFirstEntry, setPinFirstEntry] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [pinAttempts, setPinAttempts] = useState(0);
+  const [pinParent, setPinParent] = useState<'withdraw' | 'transfer'>('withdraw');
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
   const fetchBanks = async (country: string) => {
     setBanksLoading(true);
     try {
@@ -100,6 +114,7 @@ export default function Wallet() {
 
   useEffect(() => {
     fetchWallet();
+    AsyncStorage.getItem(PIN_KEY).then(p => setPinExists(!!p));
   }, []);
 
   useEffect(() => {
@@ -190,18 +205,19 @@ export default function Wallet() {
       return;
     }
 
-    setSubmitting(true);
-    try {
-      await api.withdraw(amount);
-      setShowWithdrawModal(false);
-      setWithdrawAmount('');
-      fetchWallet();
-      showAlert('success', 'Withdrawal Initiated', 'Funds will be credited to your bank account shortly.');
-    } catch (error: any) {
-      showAlert('error', 'Withdrawal Failed', error.message);
-    } finally {
-      setSubmitting(false);
-    }
+    openPinModal('withdraw', async () => {
+      setSubmitting(true);
+      try {
+        await api.withdraw(amount);
+        setWithdrawAmount('');
+        fetchWallet();
+        showAlert('success', 'Withdrawal Initiated', 'Funds will be credited to your bank account shortly.');
+      } catch (error: any) {
+        showAlert('error', 'Withdrawal Failed', error.message);
+      } finally {
+        setSubmitting(false);
+      }
+    });
   };
 
   const closeBankModal = () => {
@@ -221,6 +237,88 @@ export default function Wallet() {
     setTransferVerifyError('');
     setTransferAmount('');
   };
+
+  // ---- PIN helpers ----
+  const openPinModal = (parent: 'withdraw' | 'transfer', action: () => void) => {
+    setPinParent(parent);
+    setPendingAction(() => action);
+    setPinDigits('');
+    setPinError('');
+    setPinAttempts(0);
+    // close the parent modal before opening PIN (avoids Android dual-modal issue)
+    if (parent === 'withdraw') setShowWithdrawModal(false);
+    else setShowTransferModal(false);
+    setPinStep(pinExists ? 'verify' : 'create');
+    setTimeout(() => setShowPinModal(true), 300);
+  };
+
+  const closePinModal = () => {
+    setShowPinModal(false);
+    setPinDigits('');
+    setPinError('');
+    setPendingAction(null);
+    // reopen the parent modal so user can retry
+    setTimeout(() => {
+      if (pinParent === 'withdraw') setShowWithdrawModal(true);
+      else setShowTransferModal(true);
+    }, 300);
+  };
+
+  const handlePinKey = (key: string) => {
+    if (key === '⌫') {
+      setPinDigits(d => d.slice(0, -1));
+      setPinError('');
+      return;
+    }
+    if (pinDigits.length >= 4) return;
+    const next = pinDigits + key;
+    setPinDigits(next);
+    if (next.length === 4) setTimeout(() => handlePinSubmit(next), 150);
+  };
+
+  const handlePinSubmit = async (digits: string) => {
+    if (pinStep === 'create') {
+      setPinFirstEntry(digits);
+      setPinDigits('');
+      setPinStep('confirm_create');
+    } else if (pinStep === 'confirm_create') {
+      if (digits === pinFirstEntry) {
+        await AsyncStorage.setItem(PIN_KEY, digits);
+        setPinExists(true);
+        setPinFirstEntry('');
+        setShowPinModal(false);
+        setPinDigits('');
+        pendingAction?.();
+        setPendingAction(null);
+      } else {
+        setPinError('PINs do not match. Try again.');
+        setPinDigits('');
+        setPinStep('create');
+        setPinFirstEntry('');
+      }
+    } else {
+      const stored = await AsyncStorage.getItem(PIN_KEY);
+      if (digits === stored) {
+        setShowPinModal(false);
+        setPinDigits('');
+        setPinError('');
+        setPinAttempts(0);
+        pendingAction?.();
+        setPendingAction(null);
+      } else {
+        const attempts = pinAttempts + 1;
+        setPinAttempts(attempts);
+        setPinDigits('');
+        if (attempts >= 5) {
+          setPinError('Too many attempts. Try again in 30 seconds.');
+          setTimeout(() => { setPinAttempts(0); setPinError(''); }, 30000);
+        } else {
+          setPinError(`Incorrect PIN. ${5 - attempts} attempt${5 - attempts !== 1 ? 's' : ''} remaining.`);
+        }
+      }
+    }
+  };
+  // ---- end PIN helpers ----
 
   // Auto-verify transfer account when 10 digits entered and bank selected
   useEffect(() => {
@@ -279,25 +377,19 @@ export default function Wallet() {
       return;
     }
 
-    showConfirm(
-      'Confirm Transfer',
-      `Send ₦${amount.toLocaleString()} to ${transferAccountName} (${transferBank.name})?`,
-      'Send Money',
-      false,
-      async () => {
-        setSubmitting(true);
-        try {
-          await api.transferToBank(transferBank.code, transferAccountNumber, transferBank.name, amount);
-          closeTransferModal();
-          fetchWallet();
-          showAlert('success', 'Transfer Successful!', `₦${amount.toLocaleString()} sent to ${transferAccountName}.`);
-        } catch (error: any) {
-          showAlert('error', 'Transfer Failed', error.message);
-        } finally {
-          setSubmitting(false);
-        }
+    openPinModal('transfer', async () => {
+      setSubmitting(true);
+      try {
+        await api.transferToBank(transferBank.code, transferAccountNumber, transferBank.name, amount);
+        closeTransferModal();
+        fetchWallet();
+        showAlert('success', 'Transfer Successful!', `₦${amount.toLocaleString()} sent to ${transferAccountName}.`);
+      } catch (error: any) {
+        showAlert('error', 'Transfer Failed', error.message);
+      } finally {
+        setSubmitting(false);
       }
-    );
+    });
   };
 
   if (loading) {
@@ -766,6 +858,71 @@ export default function Wallet() {
         </View>
       </Modal>
 
+      {/* PIN Modal */}
+      <Modal visible={showPinModal} transparent animationType="fade">
+        <View style={styles.pinOverlay}>
+          <View style={[styles.pinBox, { backgroundColor: colors.surface }]}>
+            <View style={[styles.pinIconWrap, { backgroundColor: colors.primaryLight }]}>
+              <Ionicons name="lock-closed" size={28} color={colors.primary} />
+            </View>
+            <Text style={[styles.pinTitle, { color: colors.text }]}>
+              {pinStep === 'create' ? 'Create Wallet PIN' : pinStep === 'confirm_create' ? 'Confirm PIN' : 'Enter Wallet PIN'}
+            </Text>
+            <Text style={[styles.pinSubtitle, { color: colors.textSecondary }]}>
+              {pinStep === 'create'
+                ? 'Set a 4-digit PIN to secure your transactions'
+                : pinStep === 'confirm_create'
+                ? 'Re-enter your PIN to confirm'
+                : pinParent === 'withdraw' ? 'Authorise withdrawal' : 'Authorise transfer'}
+            </Text>
+
+            {/* 4 dot indicators */}
+            <View style={styles.pinDots}>
+              {[0, 1, 2, 3].map(i => (
+                <View
+                  key={i}
+                  style={[
+                    styles.pinDot,
+                    { borderColor: colors.primary },
+                    pinDigits.length > i && { backgroundColor: colors.primary },
+                  ]}
+                />
+              ))}
+            </View>
+
+            {pinError ? (
+              <Text style={[styles.pinError, { color: colors.error }]}>{pinError}</Text>
+            ) : <View style={{ height: 20 }} />}
+
+            {/* Number pad */}
+            <View style={styles.numpad}>
+              {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((key, i) => {
+                if (!key) return <View key={i} style={styles.numpadEmpty} />;
+                const isDelete = key === '⌫';
+                const disabled = !isDelete && pinDigits.length >= 4;
+                return (
+                  <TouchableOpacity
+                    key={key + i}
+                    style={[styles.numpadKey, { backgroundColor: colors.surfaceSecondary }, disabled && { opacity: 0.3 }]}
+                    onPress={() => handlePinKey(key)}
+                    disabled={disabled && !isDelete}
+                    activeOpacity={0.6}
+                  >
+                    {isDelete
+                      ? <Ionicons name="backspace-outline" size={22} color={colors.text} />
+                      : <Text style={[styles.numpadKeyText, { color: colors.text }]}>{key}</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TouchableOpacity onPress={closePinModal} style={styles.pinCancelBtn}>
+              <Text style={[styles.pinCancelText, { color: colors.textSecondary }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Custom Alert Modal */}
       {(() => {
         const iconName = alertModal.type === 'success' ? 'checkmark-circle' : alertModal.type === 'error' ? 'close-circle' : 'information-circle';
@@ -885,6 +1042,21 @@ const styles = StyleSheet.create({
   modalButton: { borderRadius: 12, height: 56, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   modalButtonDisabled: { opacity: 0.5 },
   modalButtonText: { color: '#FFFFFF', fontSize: 18, fontWeight: '600' },
+  // PIN modal
+  pinOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  pinBox: { width: '100%', borderRadius: 24, padding: 28, alignItems: 'center' },
+  pinIconWrap: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  pinTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 6, textAlign: 'center' },
+  pinSubtitle: { fontSize: 13, textAlign: 'center', marginBottom: 24 },
+  pinDots: { flexDirection: 'row', gap: 16, marginBottom: 8 },
+  pinDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, backgroundColor: 'transparent' },
+  pinError: { fontSize: 13, textAlign: 'center', marginBottom: 4, height: 20 },
+  numpad: { flexDirection: 'row', flexWrap: 'wrap', width: '100%', marginTop: 16, gap: 12 },
+  numpadKey: { width: '28%', aspectRatio: 1.4, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  numpadEmpty: { width: '28%' },
+  numpadKeyText: { fontSize: 22, fontWeight: '600' },
+  pinCancelBtn: { marginTop: 20, paddingVertical: 8, paddingHorizontal: 24 },
+  pinCancelText: { fontSize: 15, fontWeight: '500' },
   // Alert/Confirm modals
   alertOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 28 },
   alertBox: { width: '100%', borderRadius: 20, padding: 24, alignItems: 'center', elevation: 10 },
