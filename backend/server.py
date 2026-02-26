@@ -835,10 +835,16 @@ STOREFRONT_HTML = """<!DOCTYPE html>
     function N(n){{return'\\u20A6'+Number(n).toLocaleString()}}
     async function load(){{
       try{{
-        var r=await fetch('/api/storefront/'+SLUG);
-        if(!r.ok)throw new Error();
+        var ctrl=new AbortController();
+        var t=setTimeout(function(){{ctrl.abort();}},12000);
+        var r=await fetch('/api/storefront/'+SLUG,{{signal:ctrl.signal}});
+        clearTimeout(t);
+        if(!r.ok)throw new Error('Store not found ('+r.status+')');
         var d=await r.json();store=d.store;prods=d.products;render();
-      }}catch(e){{document.getElementById('app').innerHTML='<div class="empty"><p style="font-size:40px">&#128683;</p><p style="font-weight:600;margin-top:12px">Store not found</p></div>';}}
+      }}catch(e){{
+        var msg=e&&e.name==='AbortError'?'Request timed out. Please try again.':(e&&e.message)||'Store could not be loaded.';
+        document.getElementById('app').innerHTML='<div class="empty"><p style="font-size:40px">&#128683;</p><p style="font-weight:600;margin-top:12px">'+msg+'</p></div>';
+      }}
     }}
     function render(){{
       var logo=store.logo?'<img class="logo-img" src="'+store.logo+'" alt="logo">'
@@ -946,7 +952,10 @@ PAYMENT_HTML = """<!DOCTYPE html>
     async function verify(){{
       if(!REF){{show('&#9888;&#65039;','Invalid Link','No payment reference found.','Back to Store');return;}}
       try{{
-        var r=await fetch('/api/storefront/'+SLUG+'/verify/'+REF);
+        var ctrl=new AbortController();
+        var t=setTimeout(function(){{ctrl.abort();}},12000);
+        var r=await fetch('/api/storefront/'+SLUG+'/verify/'+REF,{{signal:ctrl.signal}});
+        clearTimeout(t);
         var d=await r.json();
         if(d.status==='success'){{show('&#x2705;','Payment Successful!','Thank you! The seller will contact you soon.','Continue Shopping');}}
         else{{show('&#x274C;','Payment Failed',d.message||'Something went wrong. Please try again.','Try Again');}}
@@ -963,12 +972,14 @@ PAYMENT_HTML = """<!DOCTYPE html>
 
 @app.get("/store/{slug}", response_class=HTMLResponse)
 async def storefront_page(slug: str):
-    return HTMLResponse(STOREFRONT_HTML.format(slug=slug))
+    return HTMLResponse(STOREFRONT_HTML.format(slug=slug),
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 @app.get("/store/{slug}/payment", response_class=HTMLResponse)
 async def payment_page(slug: str, reference: str = '', trxref: str = ''):
     ref = reference or trxref
-    return HTMLResponse(PAYMENT_HTML.format(slug=slug, reference=ref))
+    return HTMLResponse(PAYMENT_HTML.format(slug=slug, reference=ref),
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 
 # ================== ROOT ==================

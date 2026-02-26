@@ -60,6 +60,10 @@ export default function Wallet() {
     setConfirmModal({ visible: true, title, message, confirmText, isDestructive, onConfirm });
   };
 
+  // Inline validation errors for modals (avoids Android dual-modal issue)
+  const [withdrawError, setWithdrawError] = useState('');
+  const [transferError, setTransferError] = useState('');
+
   // Transfer state
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferBank, setTransferBank] = useState<any>(null);
@@ -193,17 +197,18 @@ export default function Wallet() {
   const handleWithdraw = async () => {
     const amount = parseFloat(withdrawAmount);
     if (isNaN(amount) || amount <= 0) {
-      showAlert('error', 'Invalid Amount', 'Please enter a valid amount');
+      setWithdrawError('Please enter a valid amount.');
       return;
     }
     if (amount < 100) {
-      showAlert('error', 'Too Low', 'Minimum withdrawal is ₦100');
+      setWithdrawError('Minimum withdrawal is ₦100.');
       return;
     }
     if (amount > (wallet?.wallet_balance || 0)) {
-      showAlert('error', 'Insufficient Balance', `Your available balance is ₦${(wallet?.wallet_balance || 0).toLocaleString()}`);
+      setWithdrawError(`Insufficient balance. Available: ₦${(wallet?.wallet_balance || 0).toLocaleString()}`);
       return;
     }
+    setWithdrawError('');
 
     openPinModal('withdraw', async () => {
       setSubmitting(true);
@@ -236,6 +241,7 @@ export default function Wallet() {
     setTransferAccountName('');
     setTransferVerifyError('');
     setTransferAmount('');
+    setTransferError('');
   };
 
   // ---- PIN helpers ----
@@ -364,18 +370,19 @@ export default function Wallet() {
 
   const handleTransfer = async () => {
     if (!transferBank || !transferAccountNumber || !transferAccountName) {
-      showAlert('error', 'Incomplete Details', 'Please select a bank and verify the account number first');
+      setTransferError('Please select a bank and verify the account number first.');
       return;
     }
     const amount = parseFloat(transferAmount);
     if (isNaN(amount) || amount < 100) {
-      showAlert('error', 'Too Low', 'Minimum transfer is ₦100');
+      setTransferError('Minimum transfer is ₦100.');
       return;
     }
     if (amount > (wallet?.wallet_balance || 0)) {
-      showAlert('error', 'Insufficient Balance', `Your available balance is ₦${(wallet?.wallet_balance || 0).toLocaleString()}`);
+      setTransferError(`Insufficient balance. Available: ₦${(wallet?.wallet_balance || 0).toLocaleString()}`);
       return;
     }
+    setTransferError('');
 
     openPinModal('transfer', async () => {
       setSubmitting(true);
@@ -714,7 +721,7 @@ export default function Wallet() {
           <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Withdraw Funds</Text>
-              <TouchableOpacity onPress={() => { setShowWithdrawModal(false); setWithdrawAmount(''); }}>
+              <TouchableOpacity onPress={() => { setShowWithdrawModal(false); setWithdrawAmount(''); setWithdrawError(''); }}>
                 <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -744,6 +751,13 @@ export default function Wallet() {
               </Text>
               <Text style={[styles.withdrawNote, { color: colors.textTertiary }]}>Minimum withdrawal: ₦100</Text>
             </View>
+
+            {withdrawError ? (
+              <View style={[styles.statusBox, { backgroundColor: colors.errorLight, marginBottom: 4 }]}>
+                <Ionicons name="alert-circle" size={20} color={colors.error} />
+                <Text style={[styles.statusBoxText, { color: colors.error }]}>{withdrawError}</Text>
+              </View>
+            ) : null}
 
             <TouchableOpacity
               style={[styles.modalButton, { backgroundColor: colors.primary }, submitting && styles.modalButtonDisabled]}
@@ -837,6 +851,13 @@ export default function Wallet() {
               returnKeyType="done"
               onSubmitEditing={Keyboard.dismiss}
             />
+
+            {transferError ? (
+              <View style={[styles.statusBox, { backgroundColor: colors.errorLight, marginBottom: 4 }]}>
+                <Ionicons name="alert-circle" size={20} color={colors.error} />
+                <Text style={[styles.statusBoxText, { color: colors.error }]}>{transferError}</Text>
+              </View>
+            ) : null}
 
             <TouchableOpacity
               style={[
