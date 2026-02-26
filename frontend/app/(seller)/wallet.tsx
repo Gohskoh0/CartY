@@ -42,6 +42,17 @@ export default function Wallet() {
   const [accountVerifyError, setAccountVerifyError] = useState('');
   const [banksLoading, setBanksLoading] = useState(false);
 
+  // Transfer state
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferBank, setTransferBank] = useState<any>(null);
+  const [transferAccountNumber, setTransferAccountNumber] = useState('');
+  const [transferAccountName, setTransferAccountName] = useState('');
+  const [transferVerifying, setTransferVerifying] = useState(false);
+  const [transferVerifyError, setTransferVerifyError] = useState('');
+  const [transferAmount, setTransferAmount] = useState('');
+  // which modal the bank picker should return to: 'setup' | 'transfer'
+  const [pickerContext, setPickerContext] = useState<'setup' | 'transfer'>('setup');
+
   const fetchBanks = async (country: string) => {
     setBanksLoading(true);
     try {
@@ -187,6 +198,101 @@ export default function Wallet() {
     setBankSearch('');
   };
 
+  const closeTransferModal = () => {
+    setShowTransferModal(false);
+    setTransferBank(null);
+    setTransferAccountNumber('');
+    setTransferAccountName('');
+    setTransferVerifyError('');
+    setTransferAmount('');
+  };
+
+  // Auto-verify transfer account when 10 digits entered and bank selected
+  useEffect(() => {
+    if (transferBank && transferAccountNumber.length === 10) {
+      verifyTransferAccount();
+    } else {
+      setTransferAccountName('');
+      setTransferVerifyError('');
+    }
+  }, [transferBank, transferAccountNumber]);
+
+  const verifyTransferAccount = async () => {
+    setTransferVerifying(true);
+    setTransferAccountName('');
+    setTransferVerifyError('');
+    try {
+      const result = await api.verifyAccount(transferBank.code, transferAccountNumber);
+      setTransferAccountName(result.account_name);
+    } catch (error: any) {
+      setTransferVerifyError(error?.message || 'Could not verify account. Check details and try again.');
+    } finally {
+      setTransferVerifying(false);
+    }
+  };
+
+  const handleUnlinkBank = () => {
+    Alert.alert(
+      'Unlink Bank Account',
+      `Remove ${wallet?.bank_name} (****${wallet?.bank_account_number?.slice(-4)}) from your wallet?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.unlinkBank();
+              fetchWallet();
+            } catch (error: any) {
+              Alert.alert('Error', error.message);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleTransfer = async () => {
+    if (!transferBank || !transferAccountNumber || !transferAccountName) {
+      Alert.alert('Error', 'Please select a bank and verify the account number first');
+      return;
+    }
+    const amount = parseFloat(transferAmount);
+    if (isNaN(amount) || amount < 100) {
+      Alert.alert('Error', 'Minimum transfer is ₦100');
+      return;
+    }
+    if (amount > (wallet?.wallet_balance || 0)) {
+      Alert.alert('Error', 'Insufficient balance');
+      return;
+    }
+
+    Alert.alert(
+      'Confirm Transfer',
+      `Send ₦${amount.toLocaleString()} to ${transferAccountName} (${transferBank.name})?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Transfer',
+          onPress: async () => {
+            setSubmitting(true);
+            try {
+              await api.transferToBank(transferBank.code, transferAccountNumber, transferBank.name, amount);
+              Alert.alert('Success', `₦${amount.toLocaleString()} sent to ${transferAccountName} successfully!`);
+              closeTransferModal();
+              fetchWallet();
+            } catch (error: any) {
+              Alert.alert('Error', error.message);
+            } finally {
+              setSubmitting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -216,21 +322,26 @@ export default function Wallet() {
           <Text style={styles.balanceAmount}>
             ₦{(wallet?.wallet_balance || 0).toLocaleString()}
           </Text>
-          <TouchableOpacity
-            style={[
-              styles.withdrawButton,
-              !wallet?.bank_account_number && styles.withdrawButtonDisabled,
-            ]}
-            onPress={() => {
-              if (!wallet?.bank_account_number) {
-                Alert.alert('Setup Required', 'Please link your bank account first');
-              } else {
-                setShowWithdrawModal(true);
-              }
-            }}
-          >
-            <Text style={[styles.withdrawButtonText, { color: colors.primary }]}>Withdraw</Text>
-          </TouchableOpacity>
+          <View style={styles.balanceButtons}>
+            <TouchableOpacity
+              style={[styles.withdrawButton, !wallet?.bank_account_number && styles.withdrawButtonDisabled]}
+              onPress={() => {
+                if (!wallet?.bank_account_number) {
+                  Alert.alert('Setup Required', 'Please link your bank account first');
+                } else {
+                  setShowWithdrawModal(true);
+                }
+              }}
+            >
+              <Text style={[styles.withdrawButtonText, { color: colors.primary }]}>Withdraw</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.transferButton}
+              onPress={() => setShowTransferModal(true)}
+            >
+              <Text style={[styles.withdrawButtonText, { color: colors.primary }]}>Transfer</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.statsRow}>
@@ -258,10 +369,12 @@ export default function Wallet() {
               <View style={styles.bankInfo}>
                 <Text style={[styles.bankName, { color: colors.text }]}>{wallet.bank_name}</Text>
                 <Text style={[styles.accountNumber, { color: colors.textSecondary }]}>
-                  ****{wallet.bank_account_number.slice(-4)}
+                  {wallet.bank_account_name ? `${wallet.bank_account_name} · ` : ''}****{wallet.bank_account_number.slice(-4)}
                 </Text>
               </View>
-              <Ionicons name="checkmark-circle" size={24} color={colors.success} />
+              <TouchableOpacity onPress={handleUnlinkBank} style={styles.unlinkButton}>
+                <Ionicons name="trash-outline" size={20} color={colors.error} />
+              </TouchableOpacity>
             </View>
           ) : (
             <TouchableOpacity
@@ -339,6 +452,7 @@ export default function Wallet() {
                 if (banks.length === 0 && !banksLoading) {
                   fetchBanks(user?.country || 'NG');
                 }
+                setPickerContext('setup');
                 setShowBankModal(false);
                 setTimeout(() => setShowBankPicker(true), 300);
               }}
@@ -409,7 +523,14 @@ export default function Wallet() {
           <View style={[styles.bankPickerContent, { backgroundColor: colors.surface }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Select Bank</Text>
-              <TouchableOpacity onPress={() => { setShowBankPicker(false); setBankSearch(''); setTimeout(() => setShowBankModal(true), 300); }}>
+              <TouchableOpacity onPress={() => {
+                setShowBankPicker(false);
+                setBankSearch('');
+                setTimeout(() => {
+                  if (pickerContext === 'transfer') setShowTransferModal(true);
+                  else setShowBankModal(true);
+                }, 300);
+              }}>
                 <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -450,10 +571,17 @@ export default function Wallet() {
                     selectedBank?.code === item.code && { backgroundColor: colors.primaryLight },
                   ]}
                   onPress={() => {
-                    setSelectedBank(item);
+                    if (pickerContext === 'transfer') {
+                      setTransferBank(item);
+                    } else {
+                      setSelectedBank(item);
+                    }
                     setShowBankPicker(false);
                     setBankSearch('');
-                    setTimeout(() => setShowBankModal(true), 300);
+                    setTimeout(() => {
+                      if (pickerContext === 'transfer') setShowTransferModal(true);
+                      else setShowBankModal(true);
+                    }, 300);
                   }}
                 >
                   <Text style={[styles.bankListItemText, { color: colors.text }]}>{item.name}</Text>
@@ -533,6 +661,103 @@ export default function Wallet() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      {/* Transfer Modal */}
+      <Modal visible={showTransferModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={Keyboard.dismiss} />
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Transfer Funds</Text>
+              <TouchableOpacity onPress={closeTransferModal}>
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={[styles.availableBalance, { color: colors.textSecondary }]}>
+              Available: ₦{(wallet?.wallet_balance || 0).toLocaleString()}
+            </Text>
+
+            <Text style={[styles.inputLabel, { color: colors.text }]}>Select Bank</Text>
+            <TouchableOpacity
+              style={[styles.bankSelector, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}
+              onPress={() => {
+                if (banks.length === 0 && !banksLoading) fetchBanks(user?.country || 'NG');
+                setPickerContext('transfer');
+                setShowTransferModal(false);
+                setTimeout(() => setShowBankPicker(true), 300);
+              }}
+            >
+              <Text style={[styles.bankSelectorText, { color: transferBank ? colors.text : colors.textTertiary }]}>
+                {transferBank ? transferBank.name : 'Tap to select a bank'}
+              </Text>
+              <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+
+            <Text style={[styles.inputLabel, { color: colors.text }]}>Account Number</Text>
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: colors.surfaceSecondary, color: colors.text }]}
+              placeholder="Enter 10-digit account number"
+              placeholderTextColor={colors.textTertiary}
+              value={transferAccountNumber}
+              onChangeText={(t) => setTransferAccountNumber(t.replace(/\D/g, '').slice(0, 10))}
+              keyboardType="numeric"
+              maxLength={10}
+              returnKeyType="done"
+              onSubmitEditing={Keyboard.dismiss}
+            />
+
+            {transferVerifying && (
+              <View style={[styles.statusBox, { backgroundColor: colors.surfaceSecondary }]}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={[styles.statusBoxText, { color: colors.textSecondary }]}>Verifying account...</Text>
+              </View>
+            )}
+            {transferAccountName ? (
+              <View style={[styles.statusBox, { backgroundColor: colors.successLight }]}>
+                <Ionicons name="checkmark-circle" size={20} color={colors.success} />
+                <Text style={[styles.statusBoxText, { color: colors.success }]}>{transferAccountName}</Text>
+              </View>
+            ) : null}
+            {transferVerifyError ? (
+              <View style={[styles.statusBox, { backgroundColor: colors.errorLight }]}>
+                <Ionicons name="alert-circle" size={20} color={colors.error} />
+                <Text style={[styles.statusBoxText, { color: colors.error }]}>{transferVerifyError}</Text>
+              </View>
+            ) : null}
+
+            <Text style={[styles.inputLabel, { color: colors.text }]}>Amount (₦)</Text>
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: colors.surfaceSecondary, color: colors.text }]}
+              placeholder="Enter amount (min ₦100)"
+              placeholderTextColor={colors.textTertiary}
+              value={transferAmount}
+              onChangeText={setTransferAmount}
+              keyboardType="numeric"
+              returnKeyType="done"
+              onSubmitEditing={Keyboard.dismiss}
+            />
+
+            <TouchableOpacity
+              style={[
+                styles.modalButton,
+                { backgroundColor: colors.primary },
+                (submitting || !transferAccountName || !transferAmount) && styles.modalButtonDisabled,
+              ]}
+              onPress={handleTransfer}
+              disabled={submitting || !transferAccountName || !transferAmount}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.modalButtonText}>Send Money</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -546,7 +771,9 @@ const styles = StyleSheet.create({
   balanceCard: { borderRadius: 16, padding: 24, alignItems: 'center' },
   balanceLabel: { color: '#C7D2FE', fontSize: 14 },
   balanceAmount: { color: '#FFFFFF', fontSize: 36, fontWeight: 'bold', marginTop: 8 },
-  withdrawButton: { backgroundColor: '#FFFFFF', paddingHorizontal: 32, paddingVertical: 12, borderRadius: 8, marginTop: 20 },
+  balanceButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
+  withdrawButton: { backgroundColor: '#FFFFFF', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8 },
+  transferButton: { backgroundColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: '#FFFFFF' },
   withdrawButtonDisabled: { opacity: 0.7 },
   withdrawButtonText: { fontWeight: '600', fontSize: 16 },
   statsRow: { flexDirection: 'row', marginTop: 16, gap: 12 },
@@ -560,6 +787,7 @@ const styles = StyleSheet.create({
   bankInfo: { flex: 1, marginLeft: 12 },
   bankName: { fontSize: 16, fontWeight: '600' },
   accountNumber: { fontSize: 14, marginTop: 2 },
+  unlinkButton: { padding: 8 },
   addBankButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 12, padding: 20, borderWidth: 2, borderStyle: 'dashed' },
   addBankText: { fontWeight: '600', marginLeft: 8 },
   withdrawalCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderRadius: 12, padding: 16, marginBottom: 8 },

@@ -114,6 +114,12 @@ class CheckoutRequest(BaseModel):
 class WithdrawalRequest(BaseModel):
     amount: float
 
+class TransferRequest(BaseModel):
+    bank_code: str
+    account_number: str
+    bank_name: str
+    amount: float
+
 class SubscribeRequest(BaseModel):
     email: str
 
@@ -616,6 +622,76 @@ async def request_withdrawal(data: WithdrawalRequest, user=Depends(get_current_u
         raise
     except httpx.HTTPError:
         raise HTTPException(status_code=500, detail="Withdrawal service unavailable")
+
+
+@api_router.post("/wallet/unlink-bank")
+async def unlink_bank(user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    await db(lambda: supabase.table('stores').update({
+        "bank_name": None, "bank_code": None,
+        "bank_account_number": None, "bank_account_name": None,
+        "recipient_code": None
+    }).eq('id', store['id']).execute())
+    return {"status": "success"}
+
+@api_router.post("/wallet/transfer")
+async def transfer_to_bank(data: TransferRequest, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    if data.amount > store.get("wallet_balance", 0):
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+    if data.amount < 100:
+        raise HTTPException(status_code=400, detail="Minimum transfer is ₦100")
+
+    reference = f"tr_{uuid.uuid4().hex[:12]}"
+    try:
+        async with httpx.AsyncClient() as client:
+            # Verify account
+            vr = await client.get(
+                f"https://api.paystack.co/bank/resolve?account_number={data.account_number}&bank_code={data.bank_code}",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"})
+            vdata = vr.json()
+            if not vdata.get("status"):
+                raise HTTPException(status_code=400, detail="Invalid account number or bank")
+            account_name = vdata["data"]["account_name"]
+
+            # Create transfer recipient
+            rr = await client.post("https://api.paystack.co/transferrecipient",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={"type": "nuban", "name": account_name, "account_number": data.account_number,
+                      "bank_code": data.bank_code, "currency": "NGN"})
+            rdata = rr.json()
+            if not rdata.get("status"):
+                raise HTTPException(status_code=400, detail="Failed to create transfer recipient")
+            recipient_code = rdata["data"]["recipient_code"]
+
+            # Initiate transfer
+            tr = await client.post("https://api.paystack.co/transfer",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={"source": "balance", "amount": int(data.amount * 100), "recipient": recipient_code,
+                      "reason": f"CartY Transfer to {account_name}", "reference": reference})
+            tdata = tr.json()
+
+        await db(lambda: supabase.table('withdrawals').insert({
+            "store_id": store['id'], "amount": data.amount,
+            "reference": reference, "status": "pending"
+        }).execute())
+
+        if tdata.get("status"):
+            await db(lambda: supabase.table('stores').update({
+                "wallet_balance": store["wallet_balance"] - data.amount
+            }).eq('id', store['id']).execute())
+            return {"status": "success", "account_name": account_name, "reference": reference}
+        else:
+            await db(lambda: supabase.table('withdrawals').update({"status": "failed"}).eq('reference', reference).execute())
+            raise HTTPException(status_code=500, detail=tdata.get("message") or "Transfer failed")
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(status_code=500, detail="Transfer service unavailable")
 
 
 # ================== ORDERS ==================

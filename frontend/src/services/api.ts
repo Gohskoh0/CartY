@@ -146,6 +146,17 @@ class ApiService {
     });
   }
 
+  async unlinkBank() {
+    return this.request('/wallet/unlink-bank', { method: 'POST' });
+  }
+
+  async transferToBank(bank_code: string, account_number: string, bank_name: string, amount: number) {
+    return this.request('/wallet/transfer', {
+      method: 'POST',
+      body: JSON.stringify({ bank_code, account_number, bank_name, amount }),
+    });
+  }
+
   async getSubscriptionPrice(country: string = 'NG') {
     return this.request(`/subscription/price?country=${country}`);
   }
