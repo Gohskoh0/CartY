@@ -40,16 +40,19 @@ export default function Wallet() {
   const [verifyingAccount, setVerifyingAccount] = useState(false);
   const [accountName, setAccountName] = useState('');
   const [accountVerifyError, setAccountVerifyError] = useState('');
+  const [banksLoading, setBanksLoading] = useState(false);
 
   const fetchBanks = async (country: string) => {
+    setBanksLoading(true);
     try {
       const banksData = await api.getBanks(country);
-      if (Array.isArray(banksData) && banksData.length > 0) {
-        setBanks(banksData);
-        setFilteredBanks(banksData);
-      }
+      const list = Array.isArray(banksData) ? banksData : [];
+      setBanks(list);
+      setFilteredBanks(list);
     } catch (error) {
       console.log('Banks fetch error:', error);
+    } finally {
+      setBanksLoading(false);
     }
   };
 
@@ -332,7 +335,12 @@ export default function Wallet() {
             <Text style={[styles.inputLabel, { color: colors.text }]}>Select Bank</Text>
             <TouchableOpacity
               style={[styles.bankSelector, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}
-              onPress={() => setShowBankPicker(true)}
+              onPress={() => {
+                if (banks.length === 0 && !banksLoading) {
+                  fetchBanks(user?.country || 'NG');
+                }
+                setShowBankPicker(true);
+              }}
             >
               <Text style={[styles.bankSelectorText, { color: selectedBank ? colors.text : colors.textTertiary }]}>
                 {selectedBank ? selectedBank.name : 'Tap to select a bank'}
@@ -422,7 +430,14 @@ export default function Wallet() {
               )}
             </View>
 
-            <FlatList
+            {banksLoading && (
+              <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={[{ color: colors.textSecondary, marginTop: 12 }]}>Loading banks...</Text>
+              </View>
+            )}
+
+            {!banksLoading && <FlatList
               data={filteredBanks}
               keyExtractor={(item) => item.code}
               keyboardShouldPersistTaps="handled"
@@ -454,7 +469,7 @@ export default function Wallet() {
                   </Text>
                 </View>
               }
-            />
+            />}
           </View>
         </View>
       </Modal>
