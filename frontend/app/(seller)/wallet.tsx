@@ -116,7 +116,7 @@ export default function Wallet() {
       const result = await api.verifyAccount(selectedBank.code, accountNumber);
       setAccountName(result.account_name);
     } catch (error: any) {
-      setAccountVerifyError('Could not verify account. Check details and try again.');
+      setAccountVerifyError(error?.message || 'Could not verify account. Check details and try again.');
     } finally {
       setVerifyingAccount(false);
     }
@@ -439,7 +439,7 @@ export default function Wallet() {
 
             {!banksLoading && <FlatList
               data={filteredBanks}
-              keyExtractor={(item) => item.code}
+              keyExtractor={(item) => item.id?.toString() || item.code}
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
                 <TouchableOpacity
