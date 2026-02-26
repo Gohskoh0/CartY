@@ -339,7 +339,8 @@ export default function Wallet() {
                 if (banks.length === 0 && !banksLoading) {
                   fetchBanks(user?.country || 'NG');
                 }
-                setShowBankPicker(true);
+                setShowBankModal(false);
+                setTimeout(() => setShowBankPicker(true), 300);
               }}
             >
               <Text style={[styles.bankSelectorText, { color: selectedBank ? colors.text : colors.textTertiary }]}>
@@ -408,7 +409,7 @@ export default function Wallet() {
           <View style={[styles.bankPickerContent, { backgroundColor: colors.surface }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Select Bank</Text>
-              <TouchableOpacity onPress={() => { setShowBankPicker(false); setBankSearch(''); }}>
+              <TouchableOpacity onPress={() => { setShowBankPicker(false); setBankSearch(''); setTimeout(() => setShowBankModal(true), 300); }}>
                 <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -452,6 +453,7 @@ export default function Wallet() {
                     setSelectedBank(item);
                     setShowBankPicker(false);
                     setBankSearch('');
+                    setTimeout(() => setShowBankModal(true), 300);
                   }}
                 >
                   <Text style={[styles.bankListItemText, { color: colors.text }]}>{item.name}</Text>
