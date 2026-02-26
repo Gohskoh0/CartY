@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
-  Alert,
   ActivityIndicator,
   TextInput,
   Modal,
@@ -41,6 +40,22 @@ export default function Wallet() {
   const [accountName, setAccountName] = useState('');
   const [accountVerifyError, setAccountVerifyError] = useState('');
   const [banksLoading, setBanksLoading] = useState(false);
+
+  // Custom alert/confirm modals
+  const [alertModal, setAlertModal] = useState<{
+    visible: boolean; type: 'success' | 'error' | 'info'; title: string; message: string;
+  }>({ visible: false, type: 'info', title: '', message: '' });
+  const [confirmModal, setConfirmModal] = useState<{
+    visible: boolean; title: string; message: string;
+    confirmText: string; isDestructive: boolean; onConfirm: () => void;
+  }>({ visible: false, title: '', message: '', confirmText: 'OK', isDestructive: false, onConfirm: () => {} });
+
+  const showAlert = (type: 'success' | 'error' | 'info', title: string, message: string) => {
+    setAlertModal({ visible: true, type, title, message });
+  };
+  const showConfirm = (title: string, message: string, confirmText: string, isDestructive: boolean, onConfirm: () => void) => {
+    setConfirmModal({ visible: true, title, message, confirmText, isDestructive, onConfirm });
+  };
 
   // Transfer state
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -135,26 +150,26 @@ export default function Wallet() {
 
   const handleSetupBank = async () => {
     if (!selectedBank || !accountNumber) {
-      Alert.alert('Error', 'Please select a bank and enter account number');
+      showAlert('error', 'Missing Details', 'Please select a bank and enter account number');
       return;
     }
     if (accountNumber.length !== 10) {
-      Alert.alert('Error', 'Account number must be exactly 10 digits');
+      showAlert('error', 'Invalid Account', 'Account number must be exactly 10 digits');
       return;
     }
     if (!accountName) {
-      Alert.alert('Error', 'Please wait for account verification to complete');
+      showAlert('info', 'Please Wait', 'Account is still being verified. Try again in a moment.');
       return;
     }
 
     setSubmitting(true);
     try {
       await api.setupBank(selectedBank.code, accountNumber, selectedBank.name);
-      Alert.alert('Success', `Bank account linked!\n${accountName}`);
       closeBankModal();
+      showAlert('success', 'Bank Linked!', `${accountName} has been linked to your wallet.`);
       fetchWallet();
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      showAlert('error', 'Link Failed', error.message);
     } finally {
       setSubmitting(false);
     }
@@ -163,27 +178,27 @@ export default function Wallet() {
   const handleWithdraw = async () => {
     const amount = parseFloat(withdrawAmount);
     if (isNaN(amount) || amount <= 0) {
-      Alert.alert('Error', 'Please enter a valid amount');
+      showAlert('error', 'Invalid Amount', 'Please enter a valid amount');
       return;
     }
     if (amount < 100) {
-      Alert.alert('Error', 'Minimum withdrawal is ₦100');
+      showAlert('error', 'Too Low', 'Minimum withdrawal is ₦100');
       return;
     }
     if (amount > (wallet?.wallet_balance || 0)) {
-      Alert.alert('Error', 'Insufficient balance');
+      showAlert('error', 'Insufficient Balance', `Your available balance is ₦${(wallet?.wallet_balance || 0).toLocaleString()}`);
       return;
     }
 
     setSubmitting(true);
     try {
       await api.withdraw(amount);
-      Alert.alert('Success', 'Withdrawal initiated! Funds will be credited to your bank account shortly.');
       setShowWithdrawModal(false);
       setWithdrawAmount('');
       fetchWallet();
+      showAlert('success', 'Withdrawal Initiated', 'Funds will be credited to your bank account shortly.');
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      showAlert('error', 'Withdrawal Failed', error.message);
     } finally {
       setSubmitting(false);
     }
@@ -232,64 +247,56 @@ export default function Wallet() {
   };
 
   const handleUnlinkBank = () => {
-    Alert.alert(
+    showConfirm(
       'Unlink Bank Account',
       `Remove ${wallet?.bank_name} (****${wallet?.bank_account_number?.slice(-4)}) from your wallet?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Unlink',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.unlinkBank();
-              fetchWallet();
-            } catch (error: any) {
-              Alert.alert('Error', error.message);
-            }
-          },
-        },
-      ]
+      'Unlink',
+      true,
+      async () => {
+        try {
+          await api.unlinkBank();
+          fetchWallet();
+          showAlert('success', 'Bank Unlinked', 'Your bank account has been removed.');
+        } catch (error: any) {
+          showAlert('error', 'Failed', error.message);
+        }
+      }
     );
   };
 
   const handleTransfer = async () => {
     if (!transferBank || !transferAccountNumber || !transferAccountName) {
-      Alert.alert('Error', 'Please select a bank and verify the account number first');
+      showAlert('error', 'Incomplete Details', 'Please select a bank and verify the account number first');
       return;
     }
     const amount = parseFloat(transferAmount);
     if (isNaN(amount) || amount < 100) {
-      Alert.alert('Error', 'Minimum transfer is ₦100');
+      showAlert('error', 'Too Low', 'Minimum transfer is ₦100');
       return;
     }
     if (amount > (wallet?.wallet_balance || 0)) {
-      Alert.alert('Error', 'Insufficient balance');
+      showAlert('error', 'Insufficient Balance', `Your available balance is ₦${(wallet?.wallet_balance || 0).toLocaleString()}`);
       return;
     }
 
-    Alert.alert(
+    showConfirm(
       'Confirm Transfer',
       `Send ₦${amount.toLocaleString()} to ${transferAccountName} (${transferBank.name})?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Transfer',
-          onPress: async () => {
-            setSubmitting(true);
-            try {
-              await api.transferToBank(transferBank.code, transferAccountNumber, transferBank.name, amount);
-              Alert.alert('Success', `₦${amount.toLocaleString()} sent to ${transferAccountName} successfully!`);
-              closeTransferModal();
-              fetchWallet();
-            } catch (error: any) {
-              Alert.alert('Error', error.message);
-            } finally {
-              setSubmitting(false);
-            }
-          },
-        },
-      ]
+      'Send Money',
+      false,
+      async () => {
+        setSubmitting(true);
+        try {
+          await api.transferToBank(transferBank.code, transferAccountNumber, transferBank.name, amount);
+          closeTransferModal();
+          fetchWallet();
+          showAlert('success', 'Transfer Successful!', `₦${amount.toLocaleString()} sent to ${transferAccountName}.`);
+        } catch (error: any) {
+          showAlert('error', 'Transfer Failed', error.message);
+        } finally {
+          setSubmitting(false);
+        }
+      }
     );
   };
 
@@ -327,7 +334,7 @@ export default function Wallet() {
               style={[styles.withdrawButton, !wallet?.bank_account_number && styles.withdrawButtonDisabled]}
               onPress={() => {
                 if (!wallet?.bank_account_number) {
-                  Alert.alert('Setup Required', 'Please link your bank account first');
+                  showAlert('info', 'Setup Required', 'Please link your bank account first before withdrawing.');
                 } else {
                   setShowWithdrawModal(true);
                 }
@@ -758,6 +765,62 @@ export default function Wallet() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      {/* Custom Alert Modal */}
+      {(() => {
+        const iconName = alertModal.type === 'success' ? 'checkmark-circle' : alertModal.type === 'error' ? 'close-circle' : 'information-circle';
+        const iconColor = alertModal.type === 'success' ? colors.success : alertModal.type === 'error' ? colors.error : colors.primary;
+        const iconBg = alertModal.type === 'success' ? colors.successLight : alertModal.type === 'error' ? colors.errorLight : colors.primaryLight;
+        return (
+          <Modal visible={alertModal.visible} transparent animationType="fade">
+            <View style={styles.alertOverlay}>
+              <View style={[styles.alertBox, { backgroundColor: colors.surface }]}>
+                <View style={[styles.alertIconWrap, { backgroundColor: iconBg }]}>
+                  <Ionicons name={iconName} size={32} color={iconColor} />
+                </View>
+                <Text style={[styles.alertTitle, { color: colors.text }]}>{alertModal.title}</Text>
+                <Text style={[styles.alertMessage, { color: colors.textSecondary }]}>{alertModal.message}</Text>
+                <TouchableOpacity
+                  style={[styles.alertBtn, { backgroundColor: iconColor }]}
+                  onPress={() => setAlertModal(a => ({ ...a, visible: false }))}
+                >
+                  <Text style={styles.alertBtnText}>OK</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        );
+      })()}
+
+      {/* Custom Confirm Modal */}
+      <Modal visible={confirmModal.visible} transparent animationType="fade">
+        <View style={styles.alertOverlay}>
+          <View style={[styles.alertBox, { backgroundColor: colors.surface }]}>
+            <View style={[styles.alertIconWrap, { backgroundColor: confirmModal.isDestructive ? colors.errorLight : colors.primaryLight }]}>
+              <Ionicons name={confirmModal.isDestructive ? 'warning-outline' : 'help-circle-outline'} size={32} color={confirmModal.isDestructive ? colors.error : colors.primary} />
+            </View>
+            <Text style={[styles.alertTitle, { color: colors.text }]}>{confirmModal.title}</Text>
+            <Text style={[styles.alertMessage, { color: colors.textSecondary }]}>{confirmModal.message}</Text>
+            <View style={styles.alertBtnRow}>
+              <TouchableOpacity
+                style={[styles.alertCancelBtn, { borderColor: colors.border }]}
+                onPress={() => setConfirmModal(c => ({ ...c, visible: false }))}
+              >
+                <Text style={[styles.alertCancelText, { color: colors.textSecondary }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.alertBtn, styles.alertBtnFlex, { backgroundColor: confirmModal.isDestructive ? colors.error : colors.primary }]}
+                onPress={() => {
+                  setConfirmModal(c => ({ ...c, visible: false }));
+                  confirmModal.onConfirm();
+                }}
+              >
+                <Text style={styles.alertBtnText}>{confirmModal.confirmText}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -822,4 +885,16 @@ const styles = StyleSheet.create({
   modalButton: { borderRadius: 12, height: 56, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   modalButtonDisabled: { opacity: 0.5 },
   modalButtonText: { color: '#FFFFFF', fontSize: 18, fontWeight: '600' },
+  // Alert/Confirm modals
+  alertOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 28 },
+  alertBox: { width: '100%', borderRadius: 20, padding: 24, alignItems: 'center', elevation: 10 },
+  alertIconWrap: { width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  alertTitle: { fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 8 },
+  alertMessage: { fontSize: 14, textAlign: 'center', lineHeight: 21, marginBottom: 24 },
+  alertBtn: { width: '100%', height: 50, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  alertBtnFlex: { flex: 1 },
+  alertBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
+  alertBtnRow: { flexDirection: 'row', gap: 12, width: '100%' },
+  alertCancelBtn: { flex: 1, height: 50, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5 },
+  alertCancelText: { fontWeight: '600', fontSize: 16 },
 });
