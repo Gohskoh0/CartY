@@ -814,6 +814,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     .prod-desc{font-size:11px;color:#6B7280;margin-top:3px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
     .add-btn{width:100%;padding:9px;background:#4F46E5;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;border-radius:0 0 12px 12px}
     .add-btn:active{background:#4338CA}
+    .card-qty{display:none;align-items:center;justify-content:center;gap:16px;padding:10px 12px}
     .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50}
     .overlay.open{display:flex;align-items:flex-end}
     .sheet{background:#fff;border-radius:22px 22px 0 0;width:100%;max-height:90vh;overflow-y:auto;padding:20px}
@@ -863,11 +864,9 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     var SLUG='CARTY_SLUG',prods=CARTY_PRODS_JSON,cart={};
     function N(n){return'\u20A6'+Number(n).toLocaleString()}
     function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-    function add(id){
-      cart[id]=(cart[id]||0)+1;updateUI();
-      var b=document.querySelector('[onclick="add(\''+id+'\')"]');
-      if(b){b.textContent='\u2713 Added!';setTimeout(function(){b.textContent='Add to Cart'},1000);}
-    }
+    function add(id){cart[id]=(cart[id]||0)+1;updateUI();}
+    function inc(id){cart[id]=(cart[id]||0)+1;updateUI();}
+    function dec(id){if(cart[id]>1)cart[id]--;else delete cart[id];updateUI();}
     function chQty(id,d){cart[id]=(cart[id]||0)+d;if(cart[id]<=0)delete cart[id];updateUI();}
     function updateUI(){
       var tot=0,cnt=0;
@@ -875,6 +874,16 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       var cb=document.getElementById('cb');
       if(cb){cb.style.display=cnt>0?'flex':'none';cb.textContent=cnt;}
       var te=document.getElementById('cartTotal');if(te)te.textContent=N(tot);
+      prods.forEach(function(p){
+        var card=document.querySelector('[data-pid="'+p.id+'"]');if(!card)return;
+        var qty=cart[p.id]||0;
+        var btn=card.querySelector('.add-btn');
+        var qc=card.querySelector('.card-qty');
+        var qn=card.querySelector('.card-qty-n');
+        if(btn)btn.style.display=qty>0?'none':'';
+        if(qc)qc.style.display=qty>0?'flex':'none';
+        if(qn)qn.textContent=qty;
+      });
       var ci=document.getElementById('cartItems');if(!ci)return;
       if(cnt===0){ci.innerHTML='<p style="color:#9CA3AF;text-align:center;padding:18px 0">Cart is empty</p>';return;}
       ci.innerHTML=Object.keys(cart).map(function(id){
@@ -951,12 +960,17 @@ def _build_storefront_html(store: dict, products: list, slug: str) -> str:
             )
             price_str = f"{p.get('price', 0):,.0f}"
             cards.append(
-                f'<div class="card">{img_html}'
+                f'<div class="card" data-pid="{pid}">{img_html}'
                 f'<div class="prod-body">'
                 f'<div class="prod-name">{_h(p.get("name", ""))}</div>'
                 f'<div class="prod-price">&#x20A6;{price_str}</div>'
                 f'{desc_html}</div>'
-                f'<button class="add-btn" onclick="add(\'{pid}\')">Add to Cart</button></div>'
+                f'<button class="add-btn" onclick="add(\'{pid}\')">Add to Cart</button>'
+                f'<div class="card-qty">'
+                f'<button class="qty-btn" onclick="dec(\'{pid}\')">&#8722;</button>'
+                f'<span class="card-qty-n">1</span>'
+                f'<button class="qty-btn" onclick="inc(\'{pid}\')">&#43;</button>'
+                f'</div></div>'
             )
         grid_html = '<div class="grid">' + ''.join(cards) + '</div>'
     else:
@@ -965,7 +979,7 @@ def _build_storefront_html(store: dict, products: list, slug: str) -> str:
         {'id': str(p.get('id', '')), 'name': p.get('name', ''), 'price': float(p.get('price', 0))}
         for p in products
     ]
-    prods_json = json.dumps(prods_data)
+    prods_json = json.dumps(prods_data, separators=(',', ':')).replace('</', r'<\/')
     return (
         _STOREFRONT_TEMPLATE
         .replace('CARTY_STORE_NAME', store_name_esc)
