@@ -193,6 +193,11 @@ async def send_order_email(seller_email: str, order_data: dict):
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
 
+def get_public_base_url(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto", "https")
+    host = request.headers.get("host", "")
+    return f"{proto}://{host}"
+
 def generate_whatsapp_link(phone: str, order_data: dict) -> str:
     items_text = "".join(f"\n- {i['name']} x{i['quantity']}" for i in order_data.get('items', []))
     message = f"""NEW ORDER!
@@ -398,7 +403,7 @@ async def checkout(slug: str, data: CheckoutRequest, background_tasks: Backgroun
                 "https://api.paystack.co/transaction/initialize",
                 headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
                 json={"email": f"{data.buyer_phone}@carty.store", "amount": int(total_amount * 100), "reference": reference,
-                      "callback_url": f"{str(request.base_url).rstrip('/')}/store/{slug}/payment"}
+                      "callback_url": f"{get_public_base_url(request)}/store/{slug}/payment"}
             )
             pdata = resp.json()
             if not pdata.get("status"):
@@ -826,11 +831,11 @@ STOREFRONT_HTML = """<!DOCTYPE html>
     </div>
   </div>
   <script>
-    var SLUG='{slug}',BASE='{base_url}',store=null,prods=[],cart={{}};
+    var SLUG='{slug}',store=null,prods=[],cart={{}};
     function N(n){{return'\\u20A6'+Number(n).toLocaleString()}}
     async function load(){{
       try{{
-        var r=await fetch(BASE+'/api/storefront/'+SLUG);
+        var r=await fetch('/api/storefront/'+SLUG);
         if(!r.ok)throw new Error();
         var d=await r.json();store=d.store;prods=d.products;render();
       }}catch(e){{document.getElementById('app').innerHTML='<div class="empty"><p style="font-size:40px">&#128683;</p><p style="font-weight:600;margin-top:12px">Store not found</p></div>';}}
@@ -898,7 +903,7 @@ STOREFRONT_HTML = """<!DOCTYPE html>
       var btn=document.getElementById('payBtn');btn.disabled=true;btn.textContent='Processing...';
       try{{
         var items=Object.keys(cart).map(function(id){{return{{product_id:id,quantity:cart[id]}}}});
-        var r=await fetch(BASE+'/api/storefront/'+SLUG+'/checkout',{{
+        var r=await fetch('/api/storefront/'+SLUG+'/checkout',{{
           method:'POST',headers:{{'Content-Type':'application/json'}},
           body:JSON.stringify({{buyer_name:name,buyer_phone:phone,buyer_address:addr,buyer_note:note||undefined,cart_items:items}})
         }});
@@ -937,11 +942,11 @@ PAYMENT_HTML = """<!DOCTYPE html>
     <p>Verifying your payment...</p>
   </div>
   <script>
-    var SLUG='{slug}',REF='{reference}',BASE='{base_url}';
+    var SLUG='{slug}',REF='{reference}';
     async function verify(){{
       if(!REF){{show('&#9888;&#65039;','Invalid Link','No payment reference found.','Back to Store');return;}}
       try{{
-        var r=await fetch(BASE+'/api/storefront/'+SLUG+'/verify/'+REF);
+        var r=await fetch('/api/storefront/'+SLUG+'/verify/'+REF);
         var d=await r.json();
         if(d.status==='success'){{show('&#x2705;','Payment Successful!','Thank you! The seller will contact you soon.','Continue Shopping');}}
         else{{show('&#x274C;','Payment Failed',d.message||'Something went wrong. Please try again.','Try Again');}}
@@ -949,7 +954,7 @@ PAYMENT_HTML = """<!DOCTYPE html>
     }}
     function show(icon,title,msg,btn){{
       document.getElementById('card').innerHTML='<div class="icon">'+icon+'</div><h1>'+title+'</h1><p>'+msg+'</p>'
-        +'<a href="'+BASE+'/store/'+SLUG+'">'+btn+'</a>';
+        +'<a href="/store/'+SLUG+'">'+btn+'</a>';
     }}
     verify();
   </script>
@@ -957,15 +962,13 @@ PAYMENT_HTML = """<!DOCTYPE html>
 </html>"""
 
 @app.get("/store/{slug}", response_class=HTMLResponse)
-async def storefront_page(slug: str, request: Request):
-    base_url = str(request.base_url).rstrip('/')
-    return HTMLResponse(STOREFRONT_HTML.format(slug=slug, base_url=base_url))
+async def storefront_page(slug: str):
+    return HTMLResponse(STOREFRONT_HTML.format(slug=slug))
 
 @app.get("/store/{slug}/payment", response_class=HTMLResponse)
-async def payment_page(slug: str, request: Request, reference: str = '', trxref: str = ''):
+async def payment_page(slug: str, reference: str = '', trxref: str = ''):
     ref = reference or trxref
-    base_url = str(request.base_url).rstrip('/')
-    return HTMLResponse(PAYMENT_HTML.format(slug=slug, reference=ref, base_url=base_url))
+    return HTMLResponse(PAYMENT_HTML.format(slug=slug, reference=ref))
 
 
 # ================== ROOT ==================
