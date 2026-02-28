@@ -830,6 +830,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     .divider{border:none;border-top:1px solid #E5E7EB;margin:14px 0}
     .sec-title{font-size:15px;font-weight:700;margin-bottom:10px}
     .fg{margin-bottom:10px}
+    .addr-row{display:flex;gap:10px}.addr-row>div{flex:1}
     label{font-size:12px;font-weight:600;color:#374151;margin-bottom:5px;display:block}
     input,textarea{width:100%;padding:11px 13px;border:1.5px solid #E5E7EB;border-radius:10px;font-size:15px;color:#111827;background:#F9FAFB;outline:none;font-family:inherit}
     input:focus,textarea:focus{border-color:#4F46E5;background:#fff}
@@ -855,7 +856,9 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       <div class="sec-title">Delivery Details</div>
       <div class="fg"><label>Full Name *</label><input id="bName" type="text" placeholder="Your full name"></div>
       <div class="fg"><label>Phone Number *</label><input id="bPhone" type="tel" placeholder="Your phone number"></div>
-      <div class="fg"><label>Delivery Address *</label><textarea id="bAddr" rows="2" placeholder="Your delivery address"></textarea></div>
+      <div class="fg"><label>Street Address *</label><input id="bStreet" type="text" placeholder="House no., street name"></div>
+      <div class="fg addr-row"><div><label>City *</label><input id="bCity" type="text" placeholder="City"></div><div><label>State *</label><input id="bState" type="text" placeholder="State"></div></div>
+      <div class="fg addr-row"><div><label>ZIP / Postal Code *</label><input id="bZip" type="text" placeholder="ZIP code"></div><div><label>Country *</label><input id="bCountry" type="text" placeholder="Country"></div></div>
       <div class="fg"><label>Note (optional)</label><input id="bNote" type="text" placeholder="Any special instructions?"></div>
       <button class="pay-btn" id="payBtn" onclick="doCheckout()">Proceed to Payment</button>
     </div>
@@ -909,9 +912,14 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     async function doCheckout(){
       var name=document.getElementById('bName').value.trim();
       var phone=document.getElementById('bPhone').value.trim();
-      var addr=document.getElementById('bAddr').value.trim();
+      var street=document.getElementById('bStreet').value.trim();
+      var city=document.getElementById('bCity').value.trim();
+      var state=document.getElementById('bState').value.trim();
+      var zip=document.getElementById('bZip').value.trim();
+      var country=document.getElementById('bCountry').value.trim();
+      var addr=street&&city&&state&&zip&&country?(street+', '+city+', '+state+' '+zip+', '+country):'';
       var note=document.getElementById('bNote').value.trim();
-      if(!name||!phone||!addr){alert('Please fill in Name, Phone and Address');return;}
+      if(!name||!phone||!street||!city||!state||!zip||!country){alert('Please fill in all required fields');return;}
       if(!Object.keys(cart).length){alert('Your cart is empty');return;}
       var btn=document.getElementById('payBtn');btn.disabled=true;btn.textContent='Processing...';
       try{
