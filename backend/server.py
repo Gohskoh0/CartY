@@ -888,10 +888,11 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       if(cnt===0){ci.innerHTML='<p style="color:#9CA3AF;text-align:center;padding:18px 0">Cart is empty</p>';return;}
       ci.innerHTML=Object.keys(cart).map(function(id){
         var p=prods.find(function(x){return x.id===id});if(!p)return'';
-        return'<div class="ci"><span class="ci-name">'+esc(p.name)+'</span>'
-          +'<button class="qty-btn" onclick="chQty(\''+id+'\',-1)">-</button>'
+        return'<div class="ci" data-id="'+id+'">'
+          +'<span class="ci-name">'+esc(p.name)+'</span>'
+          +'<button class="qty-btn" data-a="-1">-</button>'
           +'<span class="qty-n">'+cart[id]+'</span>'
-          +'<button class="qty-btn" onclick="chQty(\''+id+'\',1)">+</button>'
+          +'<button class="qty-btn" data-a="1">+</button>'
           +'<span class="ci-price">'+N(p.price*cart[id])+'</span></div>';
       }).join('');
     }
@@ -899,6 +900,11 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     function closeCart(){document.getElementById('overlay').classList.remove('open');}
     document.addEventListener('DOMContentLoaded',function(){
       document.getElementById('overlay').addEventListener('click',function(e){if(e.target===this)closeCart();});
+      document.getElementById('cartItems').addEventListener('click',function(e){
+        var btn=e.target.closest('.qty-btn[data-a]');if(!btn)return;
+        var ci=btn.closest('[data-id]');if(!ci)return;
+        chQty(ci.dataset.id,parseInt(btn.dataset.a));
+      });
     });
     async function doCheckout(){
       var name=document.getElementById('bName').value.trim();
