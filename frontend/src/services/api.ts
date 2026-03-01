@@ -173,6 +173,20 @@ class ApiService {
     return this.request(`/subscription/verify/${reference}`);
   }
 
+  async chargeSubscriptionCard(data: { card_number: string; expiry_month: string; expiry_year: string; cvv: string }) {
+    return this.request('/subscription/charge-card', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async submitSubscriptionOtp(reference: string, otp: string) {
+    return this.request('/subscription/submit-otp', {
+      method: 'POST',
+      body: JSON.stringify({ reference, otp }),
+    });
+  }
+
   // Storefront (public)
   async getStorefront(slug: string) {
     return this.request(`/storefront/${slug}`);

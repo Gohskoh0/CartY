@@ -147,7 +147,7 @@ export default function Dashboard() {
               <View style={styles.bannerText}>
                 <Text style={styles.bannerTitle}>Activate Your Store</Text>
                 <Text style={styles.bannerSubtitle}>
-                  Subscribe for ₦7,500/month to start accepting payments
+                  Subscribe for $7/month to start accepting payments
                 </Text>
               </View>
             </View>

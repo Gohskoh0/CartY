@@ -124,6 +124,32 @@ class TransferRequest(BaseModel):
 class SubscribeRequest(BaseModel):
     email: str
 
+class SubscriptionCardChargeRequest(BaseModel):
+    card_number: str
+    expiry_month: str
+    expiry_year: str
+    cvv: str
+
+class OtpSubmitRequest(BaseModel):
+    reference: str
+    otp: str
+
+class StorefrontCardChargeRequest(BaseModel):
+    buyer_name: str
+    buyer_phone: str
+    buyer_address: str
+    buyer_note: Optional[str] = None
+    cart_items: List[CartItem]
+    card_number: str
+    expiry_month: str
+    expiry_year: str
+    cvv: str
+
+class StorefrontOtpRequest(BaseModel):
+    reference: str
+    otp: str
+    order_id: str
+
 
 # ================== HELPERS ==================
 
@@ -444,6 +470,105 @@ async def verify_payment(slug: str, reference: str, background_tasks: Background
         logger.error(f"Verification error: {e}")
         raise HTTPException(status_code=500, detail="Verification service unavailable")
 
+async def _complete_storefront_order(store: dict, order_id: str, order: dict, background_tasks: BackgroundTasks):
+    await db(lambda: supabase.table('orders').update({"status": "completed", "paid_at": datetime.utcnow().isoformat()}).eq('id', order_id).execute())
+    cur = one(await db(lambda: supabase.table('stores').select('wallet_balance,total_earnings').eq('id', store['id']).limit(1).execute()))
+    await db(lambda: supabase.table('stores').update({
+        "wallet_balance": (cur['wallet_balance'] or 0) + order["total_amount"],
+        "total_earnings": (cur['total_earnings'] or 0) + order["total_amount"]
+    }).eq('id', store['id']).execute())
+    notif = {"order_id": order_id[-6:].upper(), "buyer_name": order["buyer_name"], "buyer_phone": order["buyer_phone"],
+             "buyer_address": order["buyer_address"], "buyer_note": order.get("buyer_note"),
+             "items": order["items"], "total": order["total_amount"]}
+    if store.get("email"):
+        background_tasks.add_task(send_order_email, store["email"], notif)
+    return notif
+
+@api_router.post("/storefront/{slug}/charge-card")
+async def storefront_charge_card(slug: str, data: StorefrontCardChargeRequest, background_tasks: BackgroundTasks):
+    store = one(await db(lambda: supabase.table('stores').select('*').eq('slug', slug).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    if store.get("subscription_status") != "active":
+        return {"status": "subscription_required", "message": "This store is not accepting payments.", "whatsapp_link": f"https://wa.me/{store.get('whatsapp_number','')}"}
+    total_amount, order_items = 0, []
+    for item in data.cart_items:
+        product = one(await db(lambda: supabase.table('products').select('*').eq('id', item.product_id).eq('is_active', True).limit(1).execute()))
+        if not product:
+            raise HTTPException(status_code=400, detail=f"Product not found: {item.product_id}")
+        item_total = product["price"] * item.quantity
+        total_amount += item_total
+        order_items.append({"product_id": product["id"], "name": product["name"], "quantity": item.quantity, "price": item_total})
+    reference = f"carty_{uuid.uuid4().hex[:12]}"
+    order_result = await db(lambda: supabase.table('orders').insert({
+        "store_id": store["id"], "buyer_name": data.buyer_name, "buyer_phone": data.buyer_phone,
+        "buyer_address": data.buyer_address, "buyer_note": data.buyer_note,
+        "items": order_items, "total_amount": total_amount, "payment_reference": reference, "status": "pending",
+    }).execute())
+    order_id = order_result.data[0]['id']
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.paystack.co/charge",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={
+                    "email": f"{data.buyer_phone}@carty.store",
+                    "amount": int(total_amount * 100),
+                    "reference": reference,
+                    "card": {
+                        "number": data.card_number.replace(" ", ""),
+                        "cvv": data.cvv,
+                        "expiry_month": data.expiry_month,
+                        "expiry_year": data.expiry_year,
+                    },
+                }
+            )
+            pdata = resp.json()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=500, detail="Payment service unavailable")
+    if not pdata.get("status"):
+        raise HTTPException(status_code=500, detail="Payment failed")
+    charge_status = pdata["data"]["status"]
+    if charge_status == "success":
+        order = {"total_amount": total_amount, "buyer_name": data.buyer_name, "buyer_phone": data.buyer_phone,
+                 "buyer_address": data.buyer_address, "buyer_note": data.buyer_note, "items": order_items}
+        notif = await _complete_storefront_order(store, order_id, order, background_tasks)
+        return {"status": "success", "message": "Payment successful!", "order_id": order_id,
+                "whatsapp_link": generate_whatsapp_link(store.get("whatsapp_number", ""), notif)}
+    if charge_status in ("send_otp", "send_pin", "send_phone"):
+        return {"status": charge_status, "reference": reference, "order_id": order_id,
+                "display_text": pdata["data"].get("display_text", "Enter the OTP sent to your phone")}
+    if charge_status == "open_url":
+        return {"status": "open_url", "url": pdata["data"].get("url"), "reference": reference}
+    return {"status": "failed", "message": pdata["data"].get("gateway_response", "Payment failed")}
+
+@api_router.post("/storefront/{slug}/submit-otp")
+async def storefront_submit_otp(slug: str, data: StorefrontOtpRequest, background_tasks: BackgroundTasks):
+    store = one(await db(lambda: supabase.table('stores').select('*').eq('slug', slug).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    order = one(await db(lambda: supabase.table('orders').select('*').eq('id', data.order_id).limit(1).execute()))
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.paystack.co/charge/submit_otp",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={"otp": data.otp, "reference": data.reference}
+            )
+            pdata = resp.json()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=500, detail="Payment service unavailable")
+    if not pdata.get("status"):
+        raise HTTPException(status_code=400, detail=pdata.get("message", "OTP failed"))
+    charge_status = pdata["data"]["status"]
+    if charge_status == "success":
+        notif = await _complete_storefront_order(store, data.order_id, order, background_tasks)
+        return {"status": "success", "message": "Payment successful!",
+                "whatsapp_link": generate_whatsapp_link(store.get("whatsapp_number", ""), notif)}
+    return {"status": "failed", "message": pdata["data"].get("gateway_response", "OTP verification failed")}
+
 
 # ================== SUBSCRIPTION ==================
 
@@ -513,6 +638,77 @@ async def verify_subscription(reference: str, user=Depends(get_current_user)):
             return {"status": "failed", "message": "Subscription verification failed"}
     except Exception as e:
         raise HTTPException(status_code=500, detail="Verification service unavailable")
+
+async def _activate_subscription(store_id: str, reference: str):
+    end_date = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    await db(lambda: supabase.table('stores').update({"subscription_status": "active", "subscription_end_date": end_date}).eq('id', store_id).execute())
+    await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', reference).execute())
+    return end_date
+
+@api_router.post("/subscription/charge-card")
+async def charge_subscription_card(data: SubscriptionCardChargeRequest, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    reference = f"sub_{uuid.uuid4().hex[:12]}"
+    phone = user.get('phone', 'user')
+    email = f"{phone}@carty.store"
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.paystack.co/charge",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={
+                    "email": email,
+                    "amount": 700,
+                    "currency": "USD",
+                    "reference": reference,
+                    "card": {
+                        "number": data.card_number.replace(" ", ""),
+                        "cvv": data.cvv,
+                        "expiry_month": data.expiry_month,
+                        "expiry_year": data.expiry_year,
+                    },
+                }
+            )
+            pdata = resp.json()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=500, detail="Payment service unavailable")
+    if not pdata.get("status"):
+        raise HTTPException(status_code=400, detail=pdata.get("message", "Card charge failed"))
+    await db(lambda: supabase.table('pending_subscriptions').insert({"store_id": store['id'], "reference": reference, "email": email}).execute())
+    charge_status = pdata["data"]["status"]
+    if charge_status == "success":
+        await _activate_subscription(store['id'], reference)
+        return {"status": "success", "message": "Subscription activated!"}
+    if charge_status in ("send_otp", "send_pin", "send_phone"):
+        return {"status": charge_status, "reference": reference, "display_text": pdata["data"].get("display_text", "Enter the OTP sent to your phone or email")}
+    if charge_status == "open_url":
+        return {"status": "open_url", "url": pdata["data"].get("url"), "reference": reference}
+    raise HTTPException(status_code=400, detail=pdata["data"].get("gateway_response", "Payment failed"))
+
+@api_router.post("/subscription/submit-otp")
+async def submit_subscription_otp(data: OtpSubmitRequest, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.paystack.co/charge/submit_otp",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={"otp": data.otp, "reference": data.reference}
+            )
+            pdata = resp.json()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=500, detail="Payment service unavailable")
+    if not pdata.get("status"):
+        raise HTTPException(status_code=400, detail=pdata.get("message", "OTP verification failed"))
+    charge_status = pdata["data"]["status"]
+    if charge_status == "success":
+        await _activate_subscription(store['id'], data.reference)
+        return {"status": "success", "message": "Subscription activated!"}
+    return {"status": "failed", "message": pdata["data"].get("gateway_response", "OTP verification failed")}
 
 
 # ================== WALLET ==================
@@ -860,13 +1056,19 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       <div class="fg addr-row"><div><label>City *</label><input id="bCity" type="text" placeholder="City"></div><div><label>State *</label><input id="bState" type="text" placeholder="State"></div></div>
       <div class="fg addr-row"><div><label>ZIP / Postal Code *</label><input id="bZip" type="text" placeholder="ZIP code"></div><div><label>Country *</label><input id="bCountry" type="text" placeholder="Country"></div></div>
       <div class="fg"><label>Note (optional)</label><input id="bNote" type="text" placeholder="Any special instructions?"></div>
-      <button class="pay-btn" id="payBtn" onclick="doCheckout()">Proceed to Payment</button>
+      <hr class="divider">
+      <div class="sec-title">Payment Details</div>
+      <div class="fg"><label>Card Number *</label><input id="cNum" type="tel" placeholder="0000 0000 0000 0000" maxlength="19" oninput="fmtCard(this)"></div>
+      <div class="fg addr-row"><div><label>Expiry *</label><input id="cExp" type="tel" placeholder="MM/YY" maxlength="5" oninput="fmtExp(this)"></div><div><label>CVV *</label><input id="cCvv" type="tel" placeholder="CVV" maxlength="4"></div></div>
+      <button class="pay-btn" id="payBtn" onclick="doCheckout()">Pay Now</button>
     </div>
   </div>
   <script>
     var SLUG='CARTY_SLUG',prods=CARTY_PRODS_JSON,cart={};
     function N(n){return'\u20A6'+Number(n).toLocaleString()}
     function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+    function fmtCard(el){var v=el.value.replace(/\D/g,'').slice(0,16);el.value=v.replace(/(\d{4})(?=\d)/g,'$1 ');}
+    function fmtExp(el){var v=el.value.replace(/\D/g,'');if(v.length>2)v=v.slice(0,2)+'/'+v.slice(2,4);el.value=v;}
     function add(id){cart[id]=(cart[id]||0)+1;updateUI();}
     function inc(id){cart[id]=(cart[id]||0)+1;updateUI();}
     function dec(id){if(cart[id]>1)cart[id]--;else delete cart[id];updateUI();}
@@ -901,6 +1103,34 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     }
     function openCart(){document.getElementById('overlay').classList.add('open');updateUI();}
     function closeCart(){document.getElementById('overlay').classList.remove('open');}
+    function showSuccess(){
+      document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f9fafb">'
+        +'<div style="background:#fff;border-radius:20px;padding:40px 28px;max-width:380px;width:100%;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.08)">'
+        +'<div style="font-size:64px">&#x2705;</div>'
+        +'<h1 style="font-size:22px;font-weight:700;margin:14px 0 8px">Payment Successful!</h1>'
+        +'<p style="color:#6B7280;margin-bottom:24px">Thank you! The seller will contact you soon.</p>'
+        +'<a href="/store/'+SLUG+'" style="display:inline-block;padding:14px 28px;background:#4F46E5;color:#fff;border-radius:12px;text-decoration:none;font-weight:600">Continue Shopping</a>'
+        +'</div></div>';
+    }
+    function showOtp(ref,orderId,msg){
+      var sheet=document.querySelector('.sheet');
+      sheet.innerHTML='<div style="padding:24px">'
+        +'<h3 style="margin-bottom:8px;font-size:16px;font-weight:700">One More Step</h3>'
+        +'<p style="color:#6B7280;margin-bottom:16px;font-size:14px">'+esc(msg)+'</p>'
+        +'<input id="otpIn" type="tel" placeholder="Enter OTP" style="width:100%;border:1.5px solid #E5E7EB;border-radius:10px;padding:12px 16px;font-size:16px;margin-bottom:12px;color:#111827;background:#F9FAFB;box-sizing:border-box">'
+        +'<button onclick="submitOtp(\''+ref+'\',\''+orderId+'\')" style="width:100%;padding:15px;background:#4F46E5;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer">Submit OTP</button>'
+        +'</div>';
+    }
+    async function submitOtp(ref,orderId){
+      var otp=document.getElementById('otpIn').value.trim();
+      if(!otp){alert('Please enter the OTP');return;}
+      try{
+        var r=await fetch('/api/storefront/'+SLUG+'/submit-otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:ref,otp:otp,order_id:orderId})});
+        var d=await r.json();
+        if(d.status==='success'){showSuccess();}
+        else{alert(d.message||'OTP verification failed. Please try again.');}
+      }catch(e){alert('Error: '+e.message);}
+    }
     document.addEventListener('DOMContentLoaded',function(){
       document.getElementById('overlay').addEventListener('click',function(e){if(e.target===this)closeCart();});
       document.getElementById('cartItems').addEventListener('click',function(e){
@@ -917,22 +1147,32 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       var state=document.getElementById('bState').value.trim();
       var zip=document.getElementById('bZip').value.trim();
       var country=document.getElementById('bCountry').value.trim();
-      var addr=street&&city&&state&&zip&&country?(street+', '+city+', '+state+' '+zip+', '+country):'';
       var note=document.getElementById('bNote').value.trim();
-      if(!name||!phone||!street||!city||!state||!zip||!country){alert('Please fill in all required fields');return;}
+      var cardNum=document.getElementById('cNum').value.replace(/\s/g,'');
+      var expRaw=document.getElementById('cExp').value;
+      var cvv=document.getElementById('cCvv').value.trim();
+      var expParts=expRaw.split('/');
+      var expM=(expParts[0]||'').trim();
+      var expY=(expParts[1]||'').trim();
+      var expYFull=expY.length===2?'20'+expY:expY;
+      if(!name||!phone||!street||!city||!state||!zip||!country){alert('Please fill in all delivery details');return;}
+      if(cardNum.length<15||!expM||expY.length<2||cvv.length<3){alert('Please fill in all payment details');return;}
       if(!Object.keys(cart).length){alert('Your cart is empty');return;}
       var btn=document.getElementById('payBtn');btn.disabled=true;btn.textContent='Processing...';
+      var addr=street+', '+city+', '+state+' '+zip+', '+country;
       try{
         var items=Object.keys(cart).map(function(id){return{product_id:id,quantity:cart[id]}});
-        var r=await fetch('/api/storefront/'+SLUG+'/checkout',{
+        var r=await fetch('/api/storefront/'+SLUG+'/charge-card',{
           method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({buyer_name:name,buyer_phone:phone,buyer_address:addr,buyer_note:note||undefined,cart_items:items})
+          body:JSON.stringify({buyer_name:name,buyer_phone:phone,buyer_address:addr,buyer_note:note||undefined,cart_items:items,card_number:cardNum,expiry_month:expM,expiry_year:expYFull,cvv:cvv})
         });
         var d=await r.json();
-        if(d.status==='subscription_required'){alert('This store is not accepting payments. Contact seller via WhatsApp.');btn.disabled=false;btn.textContent='Proceed to Payment';return;}
-        if(d.authorization_url){window.location.href=d.authorization_url;}
-        else{throw new Error('Payment initialization failed');}
-      }catch(e){alert('Error: '+e.message);btn.disabled=false;btn.textContent='Proceed to Payment';}
+        if(d.status==='subscription_required'){alert('This store is not accepting payments. Contact seller via WhatsApp.');btn.disabled=false;btn.textContent='Pay Now';return;}
+        if(d.status==='success'){showSuccess();return;}
+        if(d.status==='send_otp'||d.status==='send_pin'||d.status==='send_phone'){showOtp(d.reference,d.order_id,d.display_text||'Enter the OTP sent to you');btn.disabled=false;btn.textContent='Pay Now';return;}
+        if(d.status==='open_url'){window.location.href=d.url;return;}
+        throw new Error(d.message||'Payment failed');
+      }catch(e){alert('Error: '+e.message);btn.disabled=false;btn.textContent='Pay Now';}
     }
     updateUI();
   </script>
