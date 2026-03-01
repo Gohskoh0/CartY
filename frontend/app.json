@@ -35,10 +35,17 @@
           "resizeMode": "contain",
           "backgroundColor": "#000"
         }
-      ]
+      ],
+      "./plugins/withApkName"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6032789a-26a3-4cc4-a19d-f149b8c04326"
+      }
     }
   }
 }
