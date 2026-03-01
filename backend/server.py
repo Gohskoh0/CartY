@@ -650,6 +650,14 @@ async def charge_subscription_card(data: SubscriptionCardChargeRequest, user=Dep
     store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
+    # Convert $7 USD → NGN at real-time rate, then → kobo
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as fx:
+            fx_resp = await fx.get("https://open.er-api.com/v6/latest/USD")
+            ngn_rate = fx_resp.json().get("rates", {}).get("NGN", 1600.0)
+    except Exception:
+        ngn_rate = 1600.0
+    amount_kobo = int(7 * ngn_rate * 100)
     reference = f"sub_{uuid.uuid4().hex[:12]}"
     phone = user.get('phone', 'user')
     email = f"{phone}@carty.store"
@@ -660,8 +668,7 @@ async def charge_subscription_card(data: SubscriptionCardChargeRequest, user=Dep
                 headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
                 json={
                     "email": email,
-                    "amount": 700,
-                    "currency": "USD",
+                    "amount": amount_kobo,
                     "reference": reference,
                     "card": {
                         "number": data.card_number.replace(" ", ""),
