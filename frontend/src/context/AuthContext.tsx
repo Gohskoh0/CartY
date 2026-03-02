@@ -10,14 +10,15 @@ interface User {
   has_store: boolean;
   store_id: string | null;
   store_slug: string | null;
+  phone_verified: boolean;
 }
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
-  login: (phone: string, password: string) => Promise<void>;
-  register: (phone: string, password: string, country: string, state: string) => Promise<void>;
+  login: (phone: string, password: string) => Promise<User>;
+  register: (phone: string, password: string, country: string, state: string) => Promise<User>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -50,22 +51,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const login = async (phone: string, password: string) => {
+  const login = async (phone: string, password: string): Promise<User> => {
     const response = await api.login(phone, password);
     await AsyncStorage.setItem('token', response.token);
     setToken(response.token);
     api.setToken(response.token);
     const userData = await api.getMe();
     setUser(userData);
+    return userData;
   };
 
-  const register = async (phone: string, password: string, country: string, state: string) => {
+  const register = async (phone: string, password: string, country: string, state: string): Promise<User> => {
     const response = await api.register(phone, password, country, state);
     await AsyncStorage.setItem('token', response.token);
     setToken(response.token);
     api.setToken(response.token);
     const userData = await api.getMe();
     setUser(userData);
+    return userData;
   };
 
   const logout = async () => {

@@ -67,6 +67,27 @@ class ApiService {
     return this.request('/auth/me');
   }
 
+  async sendOtp(phone: string, purpose: 'verify_phone' | 'forgot_password') {
+    return this.request('/auth/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({ phone, purpose }),
+    });
+  }
+
+  async verifyPhone(code: string) {
+    return this.request('/auth/verify-phone', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+  }
+
+  async resetPassword(phone: string, code: string, new_password: string) {
+    return this.request('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ phone, code, new_password }),
+    });
+  }
+
   // Store
   async createStore(data: { name: string; whatsapp_number: string; email?: string; logo?: string }) {
     return this.request('/stores', {

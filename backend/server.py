@@ -19,6 +19,7 @@ import hmac
 import hashlib
 import json
 import re
+import random
 import urllib.parse
 import html as _html
 from supabase import create_client, Client
@@ -36,6 +37,7 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'default_secret')
 JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
 SUBSCRIPTION_PRICE_NGN = int(os.environ.get('SUBSCRIPTION_PRICE_NGN', 750000))
+TERMII_API_KEY = os.environ.get('TERMII_API_KEY', '')
 
 resend.api_key = RESEND_API_KEY
 
@@ -150,6 +152,18 @@ class StorefrontOtpRequest(BaseModel):
     otp: str
     order_id: str
 
+class SendOtpRequest(BaseModel):
+    phone: str
+    purpose: str  # 'verify_phone' or 'forgot_password'
+
+class VerifyPhoneRequest(BaseModel):
+    code: str
+
+class ResetPasswordRequest(BaseModel):
+    phone: str
+    code: str
+    new_password: str
+
 
 # ================== HELPERS ==================
 
@@ -246,6 +260,69 @@ Payment Confirmed"""
     return f"https://wa.me/{clean}?text={urllib.parse.quote(message)}"
 
 
+# ================== OTP HELPERS ==================
+
+def generate_otp() -> str:
+    return str(random.randint(100000, 999999))
+
+async def store_otp(phone: str, code: str, purpose: str):
+    expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    await db(lambda: supabase.table('otp_codes')
+        .update({'used': True})
+        .eq('phone', phone)
+        .eq('purpose', purpose)
+        .eq('used', False)
+        .execute())
+    await db(lambda: supabase.table('otp_codes').insert({
+        'phone': phone, 'code': code, 'purpose': purpose,
+        'expires_at': expires_at, 'used': False,
+    }).execute())
+
+async def verify_otp_code(phone: str, code: str, purpose: str) -> bool:
+    result = await db(lambda: supabase.table('otp_codes')
+        .select('*')
+        .eq('phone', phone)
+        .eq('code', code)
+        .eq('purpose', purpose)
+        .eq('used', False)
+        .execute())
+    if not result or not result.data:
+        return False
+    otp = result.data[0]
+    try:
+        expires_at = datetime.fromisoformat(otp['expires_at'].replace('Z', '+00:00'))
+        if datetime.now(expires_at.tzinfo) > expires_at:
+            return False
+    except Exception:
+        return False
+    await db(lambda: supabase.table('otp_codes').update({'used': True}).eq('id', otp['id']).execute())
+    return True
+
+async def send_sms_otp(phone: str, code: str, purpose: str):
+    if purpose == 'verify_phone':
+        message = f"Your CartY verification code is {code}. Valid for 10 minutes. Do not share."
+    else:
+        message = f"Your CartY password reset code is {code}. Valid for 10 minutes. Do not share."
+    if not TERMII_API_KEY:
+        logger.info(f"[DEV SMS] OTP for {phone}: {code}")
+        return
+    clean = re.sub(r'[^0-9]', '', phone)
+    if clean.startswith('0'):
+        clean = '234' + clean[1:]
+    elif not clean.startswith('234') and len(clean) <= 10:
+        clean = '234' + clean
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post("https://api.ng.termii.com/api/sms/send", json={
+                "api_key": TERMII_API_KEY, "to": clean, "from": "N-Alert",
+                "sms": message, "type": "plain", "channel": "dnd",
+            })
+            if resp.status_code != 200:
+                logger.error(f"Termii SMS error: {resp.text}")
+    except Exception as e:
+        logger.error(f"SMS send error: {e}")
+
+
 # ================== AUTH ==================
 
 @api_router.post("/auth/register")
@@ -258,8 +335,12 @@ async def register(data: UserRegister):
         "password_hash": hash_password(data.password),
         "country": data.country.upper(),
         "state": data.state,
+        "phone_verified": False,
     }).execute())
     user = result.data[0]
+    code = generate_otp()
+    await store_otp(data.phone, code, 'verify_phone')
+    await send_sms_otp(data.phone, code, 'verify_phone')
     return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone']}
 
 @api_router.post("/auth/login")
@@ -279,8 +360,46 @@ async def get_me(user=Depends(get_current_user)):
         "state": user.get('state', ''),
         "has_store": store is not None,
         "store_id": store['id'] if store else None,
-        "store_slug": store['slug'] if store else None
+        "store_slug": store['slug'] if store else None,
+        "phone_verified": user.get('phone_verified', False),
     }
+
+
+@api_router.post("/auth/send-otp")
+async def send_otp_endpoint(req: SendOtpRequest):
+    phone = req.phone.strip()
+    if req.purpose not in ('verify_phone', 'forgot_password'):
+        raise HTTPException(status_code=400, detail="Invalid purpose")
+    if req.purpose == 'forgot_password':
+        user = one(await db(lambda: supabase.table('users').select('id').eq('phone', phone).limit(1).execute()))
+        if not user:
+            raise HTTPException(status_code=404, detail="No account found with this phone number")
+    code = generate_otp()
+    await store_otp(phone, code, req.purpose)
+    await send_sms_otp(phone, code, req.purpose)
+    return {"message": "OTP sent successfully"}
+
+@api_router.post("/auth/verify-phone")
+async def verify_phone_endpoint(req: VerifyPhoneRequest, current_user=Depends(get_current_user)):
+    valid = await verify_otp_code(current_user['phone'], req.code, 'verify_phone')
+    if not valid:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    await db(lambda: supabase.table('users').update({'phone_verified': True}).eq('id', current_user['id']).execute())
+    return {"message": "Phone verified successfully"}
+
+@api_router.post("/auth/reset-password")
+async def reset_password_endpoint(req: ResetPasswordRequest):
+    phone = req.phone.strip()
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    valid = await verify_otp_code(phone, req.code, 'forgot_password')
+    if not valid:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    user = one(await db(lambda: supabase.table('users').select('id').eq('phone', phone).limit(1).execute()))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db(lambda: supabase.table('users').update({'password_hash': hash_password(req.new_password)}).eq('id', user['id']).execute())
+    return {"message": "Password reset successfully"}
 
 
 # ================== STORE ==================

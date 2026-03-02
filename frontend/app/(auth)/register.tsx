@@ -103,8 +103,8 @@ export default function Register() {
 
     setLoading(true);
     try {
-      await register(phone, password, selectedCountry.code, selectedState);
-      router.replace('/');
+      const userData = await register(phone, password, selectedCountry.code, selectedState);
+      router.replace({ pathname: '/(auth)/verify-otp', params: { phone: userData.phone } });
     } catch (error: any) {
       Alert.alert('Registration Failed', error.message || 'Something went wrong');
     } finally {

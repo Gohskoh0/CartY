@@ -32,8 +32,12 @@ export default function Login() {
 
     setLoading(true);
     try {
-      await login(phone, password);
-      router.replace('/');
+      const userData = await login(phone, password);
+      if (!userData.phone_verified) {
+        router.replace({ pathname: '/(auth)/verify-otp', params: { phone: userData.phone } });
+      } else {
+        router.replace('/');
+      }
     } catch (error: any) {
       Alert.alert('Login Failed', error.message || 'Invalid credentials');
     } finally {
@@ -102,6 +106,12 @@ export default function Login() {
                 <Text style={styles.buttonText}>Sign In</Text>
               )}
             </TouchableOpacity>
+
+            <Link href="/(auth)/forgot-password" asChild>
+              <TouchableOpacity style={styles.forgotContainer}>
+                <Text style={styles.forgotText}>Forgot Password?</Text>
+              </TouchableOpacity>
+            </Link>
 
             <View style={styles.footer}>
               <Text style={styles.footerText}>Don't have an account? </Text>
@@ -186,6 +196,15 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '600',
+  },
+  forgotContainer: {
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  forgotText: {
+    color: '#4F46E5',
+    fontSize: 15,
+    fontWeight: '500',
   },
   footer: {
     flexDirection: 'row',
