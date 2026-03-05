@@ -38,6 +38,12 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'default_secret')
 JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
 SUBSCRIPTION_PRICE_NGN = int(os.environ.get('SUBSCRIPTION_PRICE_NGN', 750000))
 TERMII_API_KEY = os.environ.get('TERMII_API_KEY', '')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+META_ACCESS_TOKEN = os.environ.get('META_ACCESS_TOKEN', '')
+META_AD_ACCOUNT_ID = os.environ.get('META_AD_ACCOUNT_ID', '')
+TIKTOK_ACCESS_TOKEN = os.environ.get('TIKTOK_ACCESS_TOKEN', '')
+TIKTOK_ADVERTISER_ID = os.environ.get('TIKTOK_ADVERTISER_ID', '')
+ADS_MARGIN_PERCENT = float(os.environ.get('ADS_MARGIN_PERCENT', '15'))
 
 resend.api_key = RESEND_API_KEY
 
@@ -163,6 +169,42 @@ class ResetPasswordRequest(BaseModel):
     phone: str
     code: str
     new_password: str
+
+class PushTokenRequest(BaseModel):
+    push_token: str
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class SupportChatRequest(BaseModel):
+    messages: List[ChatMessage]
+
+class AdCampaignCreate(BaseModel):
+    platform: str          # 'meta' or 'tiktok'
+    objective: str         # 'traffic', 'awareness', 'sales'
+    ad_headline: str
+    ad_description: str
+    ad_image: Optional[str] = None
+    target_age_min: int = 18
+    target_age_max: int = 55
+    target_gender: str = 'all'
+    target_locations: List[str] = []
+    budget_ngn: float
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+class AdCardChargeRequest(BaseModel):
+    campaign_id: str
+    card_number: str
+    expiry_month: str
+    expiry_year: str
+    cvv: str
+
+class AdOtpRequest(BaseModel):
+    reference: str
+    otp: str
+    campaign_id: str
 
 
 # ================== HELPERS ==================
@@ -323,6 +365,165 @@ async def send_sms_otp(phone: str, code: str, purpose: str):
         logger.error(f"SMS send error: {e}")
 
 
+# ================== PUSH NOTIFICATIONS ==================
+
+async def send_push_notification(push_token: str, title: str, body: str, data: dict = {}):
+    """Fire-and-forget Expo push notification."""
+    if not push_token or not push_token.startswith('ExponentPushToken'):
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post(
+                "https://exp.host/--/api/v2/push/send",
+                json={"to": push_token, "title": title, "body": body, "data": data, "sound": "default"},
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+            )
+    except Exception as e:
+        logger.error(f"Push notification error: {e}")
+
+async def get_store_push_token(store_id: str) -> Optional[str]:
+    """Lookup push token for the user who owns a store."""
+    store = one(await db(lambda: supabase.table('stores').select('user_id').eq('id', store_id).limit(1).execute()))
+    if not store:
+        return None
+    user = one(await db(lambda: supabase.table('users').select('push_token').eq('id', store['user_id']).limit(1).execute()))
+    return user.get('push_token') if user else None
+
+
+# ================== OPENAI HELPER ==================
+
+CARTY_SYSTEM_PROMPT = """You are CartY Support, a helpful and friendly AI assistant built into the CartY app — a mobile commerce platform for African vendors and small businesses.
+
+Your role:
+- Help sellers use the CartY app effectively
+- Answer questions about managing their store, products, orders, payments, and withdrawals
+- Explain CartY features in simple, clear language
+- Be encouraging and professional
+
+CartY features you can explain:
+- Store creation and customization (name, logo, WhatsApp number)
+- Product management (add, edit, delete products with photos and prices)
+- Shareable storefront link customers can browse and purchase from
+- Paystack payment processing (cards, bank transfer)
+- Wallet: receive earnings, link bank account, withdraw funds
+- Subscription: $7/month to accept online payments
+- Phone OTP verification and account security
+- Multi-country support across Africa and beyond
+
+Rules:
+- Only answer CartY-related questions
+- If asked about unrelated topics, politely redirect to CartY topics
+- Keep responses concise (2-4 sentences maximum unless a step-by-step is needed)
+- Use emojis sparingly for friendliness
+- Never make up features that don't exist
+"""
+
+async def openai_chat(messages: List[dict], system_context: str = "") -> str:
+    if not OPENAI_API_KEY:
+        return "I'm CartY Support. Our AI assistant is currently being set up. For help, please contact support via WhatsApp or email."
+    try:
+        system = CARTY_SYSTEM_PROMPT
+        if system_context:
+            system += f"\n\nCurrent seller context:\n{system_context}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "system", "content": system}] + messages,
+                    "max_tokens": 400,
+                    "temperature": 0.7,
+                },
+            )
+            data = resp.json()
+            if resp.status_code != 200:
+                logger.error(f"OpenAI error: {data}")
+                return "I'm having trouble connecting right now. Please try again in a moment."
+            return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.error(f"OpenAI request error: {e}")
+        return "I'm having trouble connecting right now. Please try again in a moment."
+
+
+# ================== ADS HELPERS ==================
+
+async def launch_meta_campaign(campaign_id: str, campaign: dict) -> Optional[str]:
+    """Launch a campaign on Meta. Returns platform_campaign_id or None if stub mode."""
+    if not META_ACCESS_TOKEN or not META_AD_ACCOUNT_ID:
+        logger.info(f"[ADS STUB] Meta campaign {campaign_id} submitted — awaiting manual launch (no META credentials configured)")
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Create campaign
+            cr = await client.post(
+                f"https://graph.facebook.com/v19.0/act_{META_AD_ACCOUNT_ID}/campaigns",
+                params={"access_token": META_ACCESS_TOKEN},
+                json={
+                    "name": f"CartY-{campaign_id[:8]}",
+                    "objective": {"traffic": "LINK_CLICKS", "awareness": "REACH", "sales": "CONVERSIONS"}.get(campaign.get("objective", "traffic"), "LINK_CLICKS"),
+                    "status": "ACTIVE",
+                    "special_ad_categories": [],
+                }
+            )
+            if cr.status_code != 200:
+                logger.error(f"Meta campaign creation failed: {cr.text}")
+                return None
+            return cr.json().get("id")
+    except Exception as e:
+        logger.error(f"Meta launch error: {e}")
+        return None
+
+async def launch_tiktok_campaign(campaign_id: str, campaign: dict) -> Optional[str]:
+    """Launch a campaign on TikTok. Returns platform_campaign_id or None if stub mode."""
+    if not TIKTOK_ACCESS_TOKEN or not TIKTOK_ADVERTISER_ID:
+        logger.info(f"[ADS STUB] TikTok campaign {campaign_id} submitted — awaiting manual launch (no TikTok credentials configured)")
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            cr = await client.post(
+                "https://business-api.tiktok.com/open_api/v1.3/campaign/create/",
+                headers={"Access-Token": TIKTOK_ACCESS_TOKEN, "Content-Type": "application/json"},
+                json={
+                    "advertiser_id": TIKTOK_ADVERTISER_ID,
+                    "campaign_name": f"CartY-{campaign_id[:8]}",
+                    "objective_type": {"traffic": "TRAFFIC", "awareness": "REACH", "sales": "CONVERSIONS"}.get(campaign.get("objective", "traffic"), "TRAFFIC"),
+                    "budget_mode": "BUDGET_MODE_TOTAL",
+                    "budget": campaign.get("actual_budget_ngn", 0) / 100,
+                }
+            )
+            if cr.status_code != 200:
+                logger.error(f"TikTok campaign creation failed: {cr.text}")
+                return None
+            return str(cr.json().get("data", {}).get("campaign_id", ""))
+    except Exception as e:
+        logger.error(f"TikTok launch error: {e}")
+        return None
+
+async def _finalize_ad_payment(campaign_id: str, reference: str):
+    """Called after payment succeeds: update campaign status and attempt launch."""
+    campaign = one(await db(lambda: supabase.table('ad_campaigns').select('*').eq('id', campaign_id).limit(1).execute()))
+    if not campaign:
+        return
+    await db(lambda: supabase.table('ad_campaigns').update({
+        "status": "paid", "payment_reference": reference
+    }).eq('id', campaign_id).execute())
+
+    platform = campaign.get('platform', 'meta')
+    platform_id = None
+    if platform == 'meta':
+        platform_id = await launch_meta_campaign(campaign_id, campaign)
+    elif platform == 'tiktok':
+        platform_id = await launch_tiktok_campaign(campaign_id, campaign)
+
+    if platform_id:
+        await db(lambda: supabase.table('ad_campaigns').update({
+            "status": "active", "platform_campaign_id": platform_id
+        }).eq('id', campaign_id).execute())
+    else:
+        await db(lambda: supabase.table('ad_campaigns').update({"status": "paid"}).eq('id', campaign_id).execute())
+
+
 # ================== AUTH ==================
 
 @api_router.post("/auth/register")
@@ -400,6 +601,145 @@ async def reset_password_endpoint(req: ResetPasswordRequest):
         raise HTTPException(status_code=404, detail="User not found")
     await db(lambda: supabase.table('users').update({'password_hash': hash_password(req.new_password)}).eq('id', user['id']).execute())
     return {"message": "Password reset successfully"}
+
+@api_router.put("/notifications/register")
+async def register_push_token(data: PushTokenRequest, user=Depends(get_current_user)):
+    await db(lambda: supabase.table('users').update({'push_token': data.push_token}).eq('id', user['id']).execute())
+    return {"status": "ok"}
+
+
+# ================== SUPPORT CHAT ==================
+
+@api_router.post("/support/chat")
+async def support_chat(data: SupportChatRequest, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
+    context_parts = [f"- Phone: {user.get('phone', 'N/A')}", f"- Country: {user.get('country', 'NG')}"]
+    if store:
+        context_parts += [
+            f"- Store name: {store.get('name', 'N/A')}",
+            f"- Subscription: {store.get('subscription_status', 'inactive')}",
+            f"- Subscription expires: {store.get('subscription_end_date', 'N/A')}",
+            f"- Wallet balance: ₦{store.get('wallet_balance', 0):,.2f}",
+            f"- Bank linked: {'Yes' if store.get('recipient_code') else 'No'}",
+        ]
+    messages = [{"role": m.role, "content": m.content} for m in data.messages]
+    reply = await openai_chat(messages, "\n".join(context_parts))
+    return {"message": reply}
+
+
+# ================== ADS ==================
+
+@api_router.post("/ads")
+async def create_ad_campaign(data: AdCampaignCreate, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    if data.platform not in ('meta', 'tiktok'):
+        raise HTTPException(status_code=400, detail="Platform must be 'meta' or 'tiktok'")
+    if data.budget_ngn < 1500:
+        raise HTTPException(status_code=400, detail="Minimum ad budget is ₦1,500")
+    actual_budget = data.budget_ngn * (1 - ADS_MARGIN_PERCENT / 100)
+    result = await db(lambda: supabase.table('ad_campaigns').insert({
+        "store_id": store['id'],
+        "platform": data.platform,
+        "objective": data.objective,
+        "status": "draft",
+        "budget_ngn": data.budget_ngn,
+        "actual_budget_ngn": actual_budget,
+        "ad_headline": data.ad_headline,
+        "ad_description": data.ad_description,
+        "ad_image": data.ad_image,
+        "target_age_min": data.target_age_min,
+        "target_age_max": data.target_age_max,
+        "target_gender": data.target_gender,
+        "target_locations": data.target_locations,
+        "start_date": data.start_date,
+        "end_date": data.end_date,
+    }).execute())
+    campaign = result.data[0]
+    return {"campaign": campaign, "total_charge_ngn": data.budget_ngn, "actual_ad_spend_ngn": actual_budget}
+
+@api_router.get("/ads")
+async def list_ad_campaigns(user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    campaigns = many(await db(lambda: supabase.table('ad_campaigns').select('*').eq('store_id', store['id']).order('created_at', desc=True).execute()))
+    return campaigns
+
+@api_router.get("/ads/{campaign_id}")
+async def get_ad_campaign(campaign_id: str, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    campaign = one(await db(lambda: supabase.table('ad_campaigns').select('*').eq('id', campaign_id).eq('store_id', store['id']).limit(1).execute()))
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    analytics = many(await db(lambda: supabase.table('ad_analytics').select('*').eq('campaign_id', campaign_id).order('date', desc=True).execute()))
+    totals = {"impressions": sum(a.get('impressions', 0) for a in analytics),
+              "clicks": sum(a.get('clicks', 0) for a in analytics),
+              "reach": sum(a.get('reach', 0) for a in analytics),
+              "spend_ngn": sum(a.get('spend_ngn', 0) for a in analytics)}
+    totals["ctr"] = round((totals["clicks"] / totals["impressions"] * 100), 2) if totals["impressions"] > 0 else 0
+    return {"campaign": campaign, "analytics": analytics, "totals": totals}
+
+@api_router.post("/ads/charge-card")
+async def charge_ad_card(data: AdCardChargeRequest, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    campaign = one(await db(lambda: supabase.table('ad_campaigns').select('*').eq('id', data.campaign_id).eq('store_id', store['id']).limit(1).execute()))
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.get('status') != 'draft':
+        raise HTTPException(status_code=400, detail="Campaign already paid")
+    reference = f"ad_{uuid.uuid4().hex[:12]}"
+    phone = user.get('phone', 'user')
+    email = f"{phone}@carty.store"
+    amount_kobo = int(campaign['budget_ngn'] * 100)
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.paystack.co/charge",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={"email": email, "amount": amount_kobo, "reference": reference,
+                      "card": {"number": data.card_number.replace(" ", ""), "cvv": data.cvv,
+                               "expiry_month": data.expiry_month, "expiry_year": data.expiry_year}},
+            )
+            pdata = resp.json()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=500, detail="Payment service unavailable")
+    if not pdata.get("status"):
+        raise HTTPException(status_code=400, detail=pdata.get("message", "Card charge failed"))
+    charge_status = pdata["data"]["status"]
+    if charge_status == "success":
+        background_tasks.add_task(_finalize_ad_payment, data.campaign_id, reference)
+        return {"status": "success", "message": "Ad campaign funded! Our team will launch it shortly."}
+    if charge_status in ("send_otp", "send_pin", "send_phone"):
+        return {"status": charge_status, "reference": reference, "campaign_id": data.campaign_id,
+                "display_text": pdata["data"].get("display_text", "Enter the OTP sent to your phone")}
+    if charge_status == "open_url":
+        return {"status": "open_url", "url": pdata["data"].get("url"), "reference": reference}
+    raise HTTPException(status_code=400, detail=pdata["data"].get("gateway_response", "Payment failed"))
+
+@api_router.post("/ads/submit-otp")
+async def submit_ad_otp(data: AdOtpRequest, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.paystack.co/charge/submit_otp",
+                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
+                json={"otp": data.otp, "reference": data.reference},
+            )
+            pdata = resp.json()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=500, detail="Payment service unavailable")
+    if not pdata.get("status"):
+        raise HTTPException(status_code=400, detail=pdata.get("message", "OTP verification failed"))
+    if pdata["data"]["status"] == "success":
+        background_tasks.add_task(_finalize_ad_payment, data.campaign_id, data.reference)
+        return {"status": "success", "message": "Ad campaign funded! Our team will launch it shortly."}
+    return {"status": "failed", "message": pdata["data"].get("gateway_response", "OTP verification failed")}
 
 
 # ================== STORE ==================
@@ -942,6 +1282,9 @@ async def request_withdrawal(data: WithdrawalRequest, user=Depends(get_current_u
 
         if tdata.get("status"):
             await db(lambda: supabase.table('stores').update({"wallet_balance": store["wallet_balance"] - data.amount}).eq('id', store['id']).execute())
+            token = user.get('push_token')
+            if token:
+                asyncio.create_task(send_push_notification(token, "Withdrawal Processing", f"₦{data.amount:,.0f} withdrawal is on its way to your bank.", {"screen": "wallet"}))
             return {"status": "success", "message": "Withdrawal initiated", "reference": reference}
         else:
             await db(lambda: supabase.table('withdrawals').update({"status": "failed"}).eq('reference', reference).execute())
@@ -1055,16 +1398,32 @@ async def paystack_webhook(request: Request):
                 cur = one(await db(lambda: supabase.table('stores').select('wallet_balance,total_earnings').eq('id', order['store_id']).limit(1).execute()))
                 if cur:
                     await db(lambda: supabase.table('stores').update({"wallet_balance": (cur['wallet_balance'] or 0) + order["total_amount"], "total_earnings": (cur['total_earnings'] or 0) + order["total_amount"]}).eq('id', order['store_id']).execute())
+                # Push notification to seller
+                token = await get_store_push_token(order['store_id'])
+                if token:
+                    asyncio.create_task(send_push_notification(token, "New Order Received!", f"{order['buyer_name']} paid ₦{order['total_amount']:,.0f}", {"screen": "orders"}))
         elif ref.startswith("sub_"):
             pending = one(await db(lambda: supabase.table('pending_subscriptions').select('*').eq('reference', ref).limit(1).execute()))
             if pending:
                 end_date = (datetime.utcnow() + timedelta(days=30)).isoformat()
                 await db(lambda: supabase.table('stores').update({"subscription_status": "active", "subscription_end_date": end_date}).eq('id', pending['store_id']).execute())
                 await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', ref).execute())
+                token = await get_store_push_token(pending['store_id'])
+                if token:
+                    asyncio.create_task(send_push_notification(token, "Store Activated!", "Your store can now accept online payments.", {"screen": "dashboard"}))
+        elif ref.startswith("ad_"):
+            campaign = one(await db(lambda: supabase.table('ad_campaigns').select('*').eq('payment_reference', ref).limit(1).execute()))
+            if campaign and campaign.get('status') == 'draft':
+                await _finalize_ad_payment(campaign['id'], ref)
 
     elif event == "transfer.success":
         ref = data["data"].get("reference", "")
+        w = one(await db(lambda: supabase.table('withdrawals').select('*').eq('reference', ref).limit(1).execute()))
         await db(lambda: supabase.table('withdrawals').update({"status": "success", "completed_at": datetime.utcnow().isoformat()}).eq('reference', ref).execute())
+        if w:
+            token = await get_store_push_token(w['store_id'])
+            if token:
+                asyncio.create_task(send_push_notification(token, "Withdrawal Successful!", f"₦{w['amount']:,.0f} has been sent to your bank.", {"screen": "wallet"}))
 
     elif event == "transfer.failed":
         ref = data["data"].get("reference", "")
@@ -1074,6 +1433,9 @@ async def paystack_webhook(request: Request):
             if cur:
                 await db(lambda: supabase.table('stores').update({"wallet_balance": (cur['wallet_balance'] or 0) + w['amount']}).eq('id', w['store_id']).execute())
             await db(lambda: supabase.table('withdrawals').update({"status": "failed"}).eq('reference', ref).execute())
+            token = await get_store_push_token(w['store_id'])
+            if token:
+                asyncio.create_task(send_push_notification(token, "Withdrawal Failed", f"₦{w['amount']:,.0f} withdrawal failed. Funds returned to wallet.", {"screen": "wallet"}))
 
     return {"status": "ok"}
 
@@ -1447,6 +1809,29 @@ async def root():
 @api_router.get("/health")
 async def health():
     return {"status": "healthy"}
+
+@api_router.get("/support/test")
+async def test_openai():
+    """Diagnostic — open this URL in browser to verify OpenAI key works."""
+    if not OPENAI_API_KEY:
+        return {"ok": False, "reason": "OPENAI_API_KEY env var is not set on Railway"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "Say: CartY test OK"}],
+                    "max_tokens": 20,
+                },
+            )
+            data = resp.json()
+            if resp.status_code == 200:
+                return {"ok": True, "reply": data["choices"][0]["message"]["content"]}
+            return {"ok": False, "http_status": resp.status_code, "error": data}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
 
 app.include_router(api_router)
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
