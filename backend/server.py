@@ -206,6 +206,14 @@ class AdOtpRequest(BaseModel):
     otp: str
     campaign_id: str
 
+class MetaConnectRequest(BaseModel):
+    access_token: str
+    ad_account_id: str   # e.g. "act_123456789" or "123456789"
+
+class TikTokConnectRequest(BaseModel):
+    access_token: str
+    advertiser_id: str
+
 
 # ================== HELPERS ==================
 
@@ -340,29 +348,48 @@ async def verify_otp_code(phone: str, code: str, purpose: str) -> bool:
     await db(lambda: supabase.table('otp_codes').update({'used': True}).eq('id', otp['id']).execute())
     return True
 
-async def send_sms_otp(phone: str, code: str, purpose: str):
+async def send_sms_otp(phone: str, code: str, purpose: str) -> bool:
+    """Send OTP via SMS. Returns True on success, False on failure."""
     if purpose == 'verify_phone':
         message = f"Your CartY verification code is {code}. Valid for 10 minutes. Do not share."
     else:
         message = f"Your CartY password reset code is {code}. Valid for 10 minutes. Do not share."
+
+    # Always log to Railway console so devs can see the OTP even if SMS fails
+    logger.info(f"[SMS OTP] Phone={phone} Code={code} Purpose={purpose}")
+
     if not TERMII_API_KEY:
-        logger.info(f"[DEV SMS] OTP for {phone}: {code}")
-        return
+        logger.warning("[SMS] TERMII_API_KEY is not set — SMS not sent. Set it in Railway env vars.")
+        return False
+
     clean = re.sub(r'[^0-9]', '', phone)
     if clean.startswith('0'):
         clean = '234' + clean[1:]
     elif not clean.startswith('234') and len(clean) <= 10:
         clean = '234' + clean
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post("https://api.ng.termii.com/api/sms/send", json={
-                "api_key": TERMII_API_KEY, "to": clean, "from": "N-Alert",
-                "sms": message, "type": "plain", "channel": "dnd",
-            })
-            if resp.status_code != 200:
-                logger.error(f"Termii SMS error: {resp.text}")
-    except Exception as e:
-        logger.error(f"SMS send error: {e}")
+
+    # Try DND channel first (bypasses Do Not Disturb in Nigeria), then fall back to generic
+    for channel in ['dnd', 'generic']:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post("https://api.ng.termii.com/api/sms/send", json={
+                    "api_key": TERMII_API_KEY,
+                    "to": clean,
+                    "from": "N-Alert",
+                    "sms": message,
+                    "type": "plain",
+                    "channel": channel,
+                })
+                result = resp.json()
+                if resp.status_code == 200 and result.get("code") == "ok":
+                    logger.info(f"[SMS] OTP sent via {channel} channel to {clean}")
+                    return True
+                logger.warning(f"[SMS] {channel} channel failed (status={resp.status_code}): {resp.text}")
+        except Exception as e:
+            logger.error(f"[SMS] Error sending via {channel} channel: {e}")
+
+    logger.error(f"[SMS] All channels failed for {clean}")
+    return False
 
 
 # ================== PUSH NOTIFICATIONS ==================
@@ -448,19 +475,59 @@ async def openai_chat(messages: List[dict], system_context: str = "") -> str:
 
 # ================== ADS HELPERS ==================
 
-async def launch_meta_campaign(campaign_id: str, campaign: dict) -> Optional[str]:
-    """Launch a campaign on Meta. Returns platform_campaign_id or None if stub mode."""
-    if not META_ACCESS_TOKEN or not META_AD_ACCOUNT_ID:
-        logger.info(f"[ADS STUB] Meta campaign {campaign_id} submitted — awaiting manual launch (no META credentials configured)")
+async def validate_meta_credentials(access_token: str, ad_account_id: str) -> dict:
+    """Validate a Meta access token + ad account. Returns account info dict."""
+    clean_id = ad_account_id if ad_account_id.startswith('act_') else f"act_{ad_account_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://graph.facebook.com/v19.0/{clean_id}",
+                params={"access_token": access_token, "fields": "name,account_status,currency"},
+            )
+            data = resp.json()
+            if "error" in data:
+                raise HTTPException(status_code=400, detail=f"Meta error: {data['error'].get('message', 'Invalid token or ad account ID')}")
+            return {"name": data.get("name", "Meta Ad Account"), "ad_account_id": clean_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not reach Meta API: {str(e)}")
+
+async def validate_tiktok_credentials(access_token: str, advertiser_id: str) -> dict:
+    """Validate a TikTok access token + advertiser ID. Returns account info dict."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://business-api.tiktok.com/open_api/v1.3/advertiser/info/",
+                headers={"Access-Token": access_token},
+                params={"advertiser_ids": json.dumps([advertiser_id])},
+            )
+            data = resp.json()
+            if data.get("code") != 0:
+                raise HTTPException(status_code=400, detail=f"TikTok error: {data.get('message', 'Invalid token or advertiser ID')}")
+            ads_list = data.get("data", {}).get("list", [])
+            if not ads_list:
+                raise HTTPException(status_code=400, detail="TikTok advertiser ID not found or no access")
+            return {"name": ads_list[0].get("advertiser_name", "TikTok Ad Account")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not reach TikTok API: {str(e)}")
+
+async def launch_meta_campaign(campaign_id: str, campaign: dict, store: dict = {}) -> Optional[str]:
+    """Launch a campaign on Meta using store or global credentials."""
+    access_token = store.get('meta_access_token') or META_ACCESS_TOKEN
+    ad_account_id = store.get('meta_ad_account_id') or (f"act_{META_AD_ACCOUNT_ID}" if META_AD_ACCOUNT_ID else '')
+    if not access_token or not ad_account_id:
+        logger.info(f"[ADS STUB] Meta campaign {campaign_id} — no credentials configured")
         return None
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            # Create campaign
             cr = await client.post(
-                f"https://graph.facebook.com/v19.0/act_{META_AD_ACCOUNT_ID}/campaigns",
-                params={"access_token": META_ACCESS_TOKEN},
+                f"https://graph.facebook.com/v19.0/{ad_account_id}/campaigns",
+                params={"access_token": access_token},
                 json={
-                    "name": f"CartY-{campaign_id[:8]}",
+                    "name": campaign.get("ad_headline", f"CartY-{campaign_id[:8]}"),
                     "objective": {"traffic": "LINK_CLICKS", "awareness": "REACH", "sales": "CONVERSIONS"}.get(campaign.get("objective", "traffic"), "LINK_CLICKS"),
                     "status": "ACTIVE",
                     "special_ad_categories": [],
@@ -474,22 +541,24 @@ async def launch_meta_campaign(campaign_id: str, campaign: dict) -> Optional[str
         logger.error(f"Meta launch error: {e}")
         return None
 
-async def launch_tiktok_campaign(campaign_id: str, campaign: dict) -> Optional[str]:
-    """Launch a campaign on TikTok. Returns platform_campaign_id or None if stub mode."""
-    if not TIKTOK_ACCESS_TOKEN or not TIKTOK_ADVERTISER_ID:
-        logger.info(f"[ADS STUB] TikTok campaign {campaign_id} submitted — awaiting manual launch (no TikTok credentials configured)")
+async def launch_tiktok_campaign(campaign_id: str, campaign: dict, store: dict = {}) -> Optional[str]:
+    """Launch a campaign on TikTok using store or global credentials."""
+    access_token = store.get('tiktok_access_token') or TIKTOK_ACCESS_TOKEN
+    advertiser_id = store.get('tiktok_advertiser_id') or TIKTOK_ADVERTISER_ID
+    if not access_token or not advertiser_id:
+        logger.info(f"[ADS STUB] TikTok campaign {campaign_id} — no credentials configured")
         return None
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             cr = await client.post(
                 "https://business-api.tiktok.com/open_api/v1.3/campaign/create/",
-                headers={"Access-Token": TIKTOK_ACCESS_TOKEN, "Content-Type": "application/json"},
+                headers={"Access-Token": access_token, "Content-Type": "application/json"},
                 json={
-                    "advertiser_id": TIKTOK_ADVERTISER_ID,
-                    "campaign_name": f"CartY-{campaign_id[:8]}",
+                    "advertiser_id": advertiser_id,
+                    "campaign_name": campaign.get("ad_headline", f"CartY-{campaign_id[:8]}"),
                     "objective_type": {"traffic": "TRAFFIC", "awareness": "REACH", "sales": "CONVERSIONS"}.get(campaign.get("objective", "traffic"), "TRAFFIC"),
                     "budget_mode": "BUDGET_MODE_TOTAL",
-                    "budget": campaign.get("actual_budget_ngn", 0) / 100,
+                    "budget": campaign.get("budget_ngn", 0) / 100,
                 }
             )
             if cr.status_code != 200:
@@ -523,6 +592,27 @@ async def _finalize_ad_payment(campaign_id: str, reference: str):
     else:
         await db(lambda: supabase.table('ad_campaigns').update({"status": "paid"}).eq('id', campaign_id).execute())
 
+async def _launch_campaign_bg(campaign_id: str, store: dict):
+    """Background task: launch campaign using store's own ad account credentials."""
+    campaign = one(await db(lambda: supabase.table('ad_campaigns').select('*').eq('id', campaign_id).limit(1).execute()))
+    if not campaign:
+        return
+    platform = campaign.get('platform', 'meta')
+    platform_id = None
+    if platform == 'meta':
+        platform_id = await launch_meta_campaign(campaign_id, campaign, store)
+    elif platform == 'tiktok':
+        platform_id = await launch_tiktok_campaign(campaign_id, campaign, store)
+
+    if platform_id:
+        await db(lambda: supabase.table('ad_campaigns').update({
+            "status": "active", "platform_campaign_id": platform_id
+        }).eq('id', campaign_id).execute())
+        logger.info(f"[Ads] Campaign {campaign_id} launched on {platform}: {platform_id}")
+    else:
+        await db(lambda: supabase.table('ad_campaigns').update({"status": "failed"}).eq('id', campaign_id).execute())
+        logger.error(f"[Ads] Campaign {campaign_id} failed to launch on {platform}")
+
 
 # ================== AUTH ==================
 
@@ -541,8 +631,8 @@ async def register(data: UserRegister):
     user = result.data[0]
     code = generate_otp()
     await store_otp(data.phone, code, 'verify_phone')
-    await send_sms_otp(data.phone, code, 'verify_phone')
-    return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone']}
+    sms_sent = await send_sms_otp(data.phone, code, 'verify_phone')
+    return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone'], "sms_sent": sms_sent}
 
 @api_router.post("/auth/login")
 async def login(data: UserLogin):
@@ -577,7 +667,9 @@ async def send_otp_endpoint(req: SendOtpRequest):
             raise HTTPException(status_code=404, detail="No account found with this phone number")
     code = generate_otp()
     await store_otp(phone, code, req.purpose)
-    await send_sms_otp(phone, code, req.purpose)
+    sent = await send_sms_otp(phone, code, req.purpose)
+    if not sent:
+        raise HTTPException(status_code=503, detail="Could not send SMS. Check your phone number or try again later.")
     return {"message": "OTP sent successfully"}
 
 @api_router.post("/auth/verify-phone")
@@ -629,23 +721,75 @@ async def support_chat(data: SupportChatRequest, user=Depends(get_current_user))
 
 # ================== ADS ==================
 
-@api_router.post("/ads")
-async def create_ad_campaign(data: AdCampaignCreate, user=Depends(get_current_user)):
+@api_router.get("/ads/connected-accounts")
+async def get_connected_ad_accounts(user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('meta_ad_account_id,tiktok_advertiser_id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    return {
+        "meta": {"connected": bool(store.get('meta_ad_account_id')), "ad_account_id": store.get('meta_ad_account_id')},
+        "tiktok": {"connected": bool(store.get('tiktok_advertiser_id')), "advertiser_id": store.get('tiktok_advertiser_id')},
+    }
+
+@api_router.post("/ads/connect/meta")
+async def connect_meta_account(data: MetaConnectRequest, user=Depends(get_current_user)):
     store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    account_info = await validate_meta_credentials(data.access_token, data.ad_account_id)
+    clean_id = data.ad_account_id if data.ad_account_id.startswith('act_') else f"act_{data.ad_account_id}"
+    await db(lambda: supabase.table('stores').update({
+        'meta_access_token': data.access_token,
+        'meta_ad_account_id': clean_id,
+    }).eq('id', store['id']).execute())
+    return {"connected": True, "account_name": account_info.get("name", "Meta Ad Account"), "ad_account_id": clean_id}
+
+@api_router.delete("/ads/connect/meta")
+async def disconnect_meta_account(user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    await db(lambda: supabase.table('stores').update({'meta_access_token': None, 'meta_ad_account_id': None}).eq('id', store['id']).execute())
+    return {"connected": False}
+
+@api_router.post("/ads/connect/tiktok")
+async def connect_tiktok_account(data: TikTokConnectRequest, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    account_info = await validate_tiktok_credentials(data.access_token, data.advertiser_id)
+    await db(lambda: supabase.table('stores').update({
+        'tiktok_access_token': data.access_token,
+        'tiktok_advertiser_id': data.advertiser_id,
+    }).eq('id', store['id']).execute())
+    return {"connected": True, "account_name": account_info.get("name", "TikTok Ad Account"), "advertiser_id": data.advertiser_id}
+
+@api_router.delete("/ads/connect/tiktok")
+async def disconnect_tiktok_account(user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    await db(lambda: supabase.table('stores').update({'tiktok_access_token': None, 'tiktok_advertiser_id': None}).eq('id', store['id']).execute())
+    return {"connected": False}
+
+@api_router.post("/ads")
+async def create_ad_campaign(data: AdCampaignCreate, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+    store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
     if data.platform not in ('meta', 'tiktok'):
         raise HTTPException(status_code=400, detail="Platform must be 'meta' or 'tiktok'")
-    if data.budget_ngn < 1500:
-        raise HTTPException(status_code=400, detail="Minimum ad budget is ₦1,500")
-    actual_budget = data.budget_ngn * (1 - ADS_MARGIN_PERCENT / 100)
+    if data.platform == 'meta' and not store.get('meta_access_token'):
+        raise HTTPException(status_code=400, detail="Connect your Meta Ads account first in the Ads tab")
+    if data.platform == 'tiktok' and not store.get('tiktok_access_token'):
+        raise HTTPException(status_code=400, detail="Connect your TikTok Ads account first in the Ads tab")
     result = await db(lambda: supabase.table('ad_campaigns').insert({
         "store_id": store['id'],
         "platform": data.platform,
         "objective": data.objective,
-        "status": "draft",
+        "status": "launching",
         "budget_ngn": data.budget_ngn,
-        "actual_budget_ngn": actual_budget,
+        "actual_budget_ngn": data.budget_ngn,
         "ad_headline": data.ad_headline,
         "ad_description": data.ad_description,
         "ad_image": data.ad_image,
@@ -657,7 +801,9 @@ async def create_ad_campaign(data: AdCampaignCreate, user=Depends(get_current_us
         "end_date": data.end_date,
     }).execute())
     campaign = result.data[0]
-    return {"campaign": campaign, "total_charge_ngn": data.budget_ngn, "actual_ad_spend_ngn": actual_budget}
+    # Launch campaign via platform API in background
+    background_tasks.add_task(_launch_campaign_bg, campaign['id'], dict(store))
+    return {"campaign": campaign, "message": "Campaign is being launched on your ad account."}
 
 @api_router.get("/ads")
 async def list_ad_campaigns(user=Depends(get_current_user)):

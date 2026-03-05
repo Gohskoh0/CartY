@@ -275,24 +275,31 @@ class ApiService {
     return this.request(`/ads/${campaignId}`);
   }
 
-  async chargeAdCard(data: {
-    campaign_id: string;
-    card_number: string;
-    expiry_month: string;
-    expiry_year: string;
-    cvv: string;
-  }) {
-    return this.request('/ads/charge-card', {
+  // Ad account connections
+  async getConnectedAdAccounts() {
+    return this.request('/ads/connected-accounts');
+  }
+
+  async connectMetaAccount(data: { access_token: string; ad_account_id: string }) {
+    return this.request('/ads/connect/meta', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  async submitAdOtp(reference: string, otp: string, campaign_id: string) {
-    return this.request('/ads/submit-otp', {
+  async disconnectMetaAccount() {
+    return this.request('/ads/connect/meta', { method: 'DELETE' });
+  }
+
+  async connectTikTokAccount(data: { access_token: string; advertiser_id: string }) {
+    return this.request('/ads/connect/tiktok', {
       method: 'POST',
-      body: JSON.stringify({ reference, otp, campaign_id }),
+      body: JSON.stringify(data),
     });
+  }
+
+  async disconnectTikTokAccount() {
+    return this.request('/ads/connect/tiktok', { method: 'DELETE' });
   }
 }
 

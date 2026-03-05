@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Image, KeyboardAvoidingView, Platform,
+  TextInput, ActivityIndicator, Image, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -11,7 +11,7 @@ import { api } from '../../src/services/api';
 import { useTheme } from '../../src/context/ThemeContext';
 import { useAuth } from '../../src/context/AuthContext';
 
-const STEPS = ['Platform', 'Creative', 'Audience', 'Budget', 'Payment'];
+const STEPS = ['Platform', 'Creative', 'Audience', 'Budget', 'Launch'];
 
 const PLATFORMS = [
   { id: 'meta',   label: 'Meta',   sub: 'Facebook & Instagram', icon: 'logo-facebook', color: '#1877F2' },
@@ -19,9 +19,9 @@ const PLATFORMS = [
 ];
 
 const OBJECTIVES = [
-  { id: 'traffic',   label: 'Traffic',    sub: 'Drive link clicks to your store', icon: 'link-outline' },
-  { id: 'awareness', label: 'Awareness',  sub: 'Reach more people', icon: 'eye-outline' },
-  { id: 'sales',     label: 'Sales',      sub: 'Find buyers ready to purchase', icon: 'bag-handle-outline' },
+  { id: 'traffic',   label: 'Traffic',   sub: 'Drive link clicks to your store',   icon: 'link-outline' },
+  { id: 'awareness', label: 'Awareness', sub: 'Reach more people',                 icon: 'eye-outline' },
+  { id: 'sales',     label: 'Sales',     sub: 'Find buyers ready to purchase',     icon: 'bag-handle-outline' },
 ];
 
 const DURATIONS = [
@@ -43,7 +43,6 @@ const LOCATION_NAMES: Record<string, string> = {
   CM: 'Cameroon', EG: 'Egypt',
 };
 
-const ADS_MARGIN = 0.15; // 15%
 const MIN_DAILY_BUDGET = 500;
 
 export default function CreateAd() {
@@ -52,6 +51,7 @@ export default function CreateAd() {
   const { user } = useAuth();
 
   const [step, setStep] = useState(0);
+  const [connected, setConnected] = useState<any>({ meta: { connected: false }, tiktok: { connected: false } });
 
   // Step 1
   const [platform, setPlatform] = useState('');
@@ -72,21 +72,17 @@ export default function CreateAd() {
   const [dailyBudget, setDailyBudget] = useState('');
   const [durationDays, setDurationDays] = useState(7);
 
-  // Step 5 — payment
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvv, setCvv] = useState('');
+  // Step 5 — launch
   const [submitting, setSubmitting] = useState(false);
-  const [otpStep, setOtpStep] = useState(false);
-  const [otp, setOtp] = useState('');
-  const [pendingRef, setPendingRef] = useState('');
-  const [pendingCampaignId, setPendingCampaignId] = useState('');
-  const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
   const budget = parseFloat(dailyBudget || '0') * durationDays;
-  const fee = budget * ADS_MARGIN;
-  const total = budget + fee;
+
+  useEffect(() => {
+    api.getConnectedAdAccounts()
+      .then(data => setConnected(data))
+      .catch(() => {});
+  }, []);
 
   const canNext = () => {
     if (step === 0) return platform && objective;
@@ -112,64 +108,23 @@ export default function CreateAd() {
     );
   };
 
-  const formatCardNumber = (val: string) => {
-    const digits = val.replace(/\D/g, '').slice(0, 16);
-    return digits.replace(/(.{4})/g, '$1 ').trim();
-  };
-
-  const formatExpiry = (val: string) => {
-    const digits = val.replace(/\D/g, '').slice(0, 4);
-    if (digits.length >= 3) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
-    return digits;
-  };
-
-  const handlePay = async () => {
-    setError('');
+  const handleLaunch = async () => {
     setSubmitting(true);
     try {
-      // Create campaign
-      const expiryParts = expiry.replace('/', '').padEnd(4, '0');
-      const campaign = await api.createAdCampaign({
+      await api.createAdCampaign({
         platform, objective,
-        ad_headline: headline, ad_description: description,
+        ad_headline: headline,
+        ad_description: description,
         ad_image: adImage || undefined,
-        target_age_min: ageMin, target_age_max: ageMax,
-        target_gender: gender, target_locations: locations,
-        budget_ngn: total,
+        target_age_min: ageMin,
+        target_age_max: ageMax,
+        target_gender: gender,
+        target_locations: locations,
+        budget_ngn: budget,
       });
-
-      // Charge card
-      const cardDigits = cardNumber.replace(/\s/g, '');
-      const result = await api.chargeAdCard({
-        campaign_id: campaign.id,
-        card_number: cardDigits,
-        expiry_month: expiryParts.slice(0, 2),
-        expiry_year: expiryParts.slice(2),
-        cvv,
-      });
-
-      if (result.status === 'send_otp' || result.status === 'pay_offline') {
-        setPendingRef(result.reference);
-        setPendingCampaignId(campaign.id);
-        setOtpStep(true);
-      } else {
-        setSuccess(true);
-      }
-    } catch (e: any) {
-      setError(e.message || 'Payment failed. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleOtp = async () => {
-    setError('');
-    setSubmitting(true);
-    try {
-      await api.submitAdOtp(pendingRef, otp, pendingCampaignId);
       setSuccess(true);
     } catch (e: any) {
-      setError(e.message || 'OTP verification failed.');
+      Alert.alert('Launch Failed', e.message || 'Could not launch campaign. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -180,11 +135,11 @@ export default function CreateAd() {
       <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]}>
         <View style={styles.successScreen}>
           <View style={[styles.successIcon, { backgroundColor: colors.successLight }]}>
-            <Ionicons name="checkmark-circle" size={72} color={colors.accent} />
+            <Ionicons name="rocket" size={64} color={colors.accent} />
           </View>
-          <Text style={[styles.successTitle, { color: colors.text }]}>Campaign Submitted!</Text>
+          <Text style={[styles.successTitle, { color: colors.text }]}>Campaign Launched!</Text>
           <Text style={[styles.successSub, { color: colors.textSecondary }]}>
-            Your campaign is paid and queued. CartY will launch it within 24 hours. You'll get a notification when it goes live.
+            Your campaign is being launched on your {platform === 'meta' ? 'Meta' : 'TikTok'} ad account. Check the Ads tab for live status.
           </Text>
           <TouchableOpacity
             style={[styles.doneBtn, { backgroundColor: colors.primary }]}
@@ -196,6 +151,8 @@ export default function CreateAd() {
       </SafeAreaView>
     );
   }
+
+  const platformCfg = platform ? PLATFORMS.find(p => p.id === platform) : null;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
@@ -226,26 +183,42 @@ export default function CreateAd() {
           {step === 0 && (
             <View style={styles.stepContent}>
               <Text style={[styles.stepLabel, { color: colors.textSecondary }]}>CHOOSE PLATFORM</Text>
-              {PLATFORMS.map(p => (
-                <TouchableOpacity
-                  key={p.id}
-                  style={[styles.optionCard, {
-                    backgroundColor: colors.surface,
-                    borderColor: platform === p.id ? p.color : colors.border,
-                    borderWidth: platform === p.id ? 2 : 1,
-                  }]}
-                  onPress={() => setPlatform(p.id)}
-                >
-                  <View style={[styles.optionIcon, { backgroundColor: p.color + '22' }]}>
-                    <Ionicons name={p.icon as any} size={28} color={p.color} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.optionLabel, { color: colors.text }]}>{p.label}</Text>
-                    <Text style={[styles.optionSub, { color: colors.textSecondary }]}>{p.sub}</Text>
-                  </View>
-                  {platform === p.id && <Ionicons name="checkmark-circle" size={22} color={p.color} />}
-                </TouchableOpacity>
-              ))}
+              {PLATFORMS.map(p => {
+                const isConnected = connected[p.id]?.connected;
+                const isSelected = platform === p.id;
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.optionCard, {
+                      backgroundColor: colors.surface,
+                      borderColor: isSelected ? p.color : colors.border,
+                      borderWidth: isSelected ? 2 : 1,
+                      opacity: !isConnected ? 0.5 : 1,
+                    }]}
+                    onPress={() => {
+                      if (!isConnected) {
+                        Alert.alert('Not Connected', `Connect your ${p.label} Ads account in the Ads tab first.`);
+                        return;
+                      }
+                      setPlatform(p.id);
+                    }}
+                  >
+                    <View style={[styles.optionIcon, { backgroundColor: p.color + '22' }]}>
+                      <Ionicons name={p.icon as any} size={28} color={p.color} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.optionLabel, { color: colors.text }]}>{p.label}</Text>
+                      <Text style={[styles.optionSub, { color: colors.textSecondary }]}>{p.sub}</Text>
+                    </View>
+                    {isConnected
+                      ? isSelected
+                        ? <Ionicons name="checkmark-circle" size={22} color={p.color} />
+                        : <View style={[styles.connectedDot, { backgroundColor: '#10B981' }]} />
+                      : <Text style={[styles.notConnectedText, { color: colors.textSecondary }]}>Not connected</Text>
+                    }
+                  </TouchableOpacity>
+                );
+              })}
 
               <Text style={[styles.stepLabel, { color: colors.textSecondary, marginTop: 24 }]}>CAMPAIGN OBJECTIVE</Text>
               {OBJECTIVES.map(o => (
@@ -319,7 +292,6 @@ export default function CreateAd() {
               />
               <Text style={[styles.charCount, { color: colors.textTertiary }]}>{description.length}/125</Text>
 
-              {/* Preview card */}
               {headline.trim().length > 0 && (
                 <View style={[styles.previewCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                   <Text style={[styles.previewLabel, { color: colors.textSecondary }]}>AD PREVIEW</Text>
@@ -348,17 +320,11 @@ export default function CreateAd() {
                 <View style={styles.ageControl}>
                   <Text style={[styles.ageControlLabel, { color: colors.textSecondary }]}>Min Age</Text>
                   <View style={styles.ageButtons}>
-                    <TouchableOpacity
-                      style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]}
-                      onPress={() => setAgeMin(Math.max(18, ageMin - 1))}
-                    >
+                    <TouchableOpacity style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]} onPress={() => setAgeMin(Math.max(18, ageMin - 1))}>
                       <Ionicons name="remove" size={18} color={colors.text} />
                     </TouchableOpacity>
                     <Text style={[styles.ageValue, { color: colors.text }]}>{ageMin}</Text>
-                    <TouchableOpacity
-                      style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]}
-                      onPress={() => setAgeMin(Math.min(ageMax - 1, ageMin + 1))}
-                    >
+                    <TouchableOpacity style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]} onPress={() => setAgeMin(Math.min(ageMax - 1, ageMin + 1))}>
                       <Ionicons name="add" size={18} color={colors.text} />
                     </TouchableOpacity>
                   </View>
@@ -367,17 +333,11 @@ export default function CreateAd() {
                 <View style={styles.ageControl}>
                   <Text style={[styles.ageControlLabel, { color: colors.textSecondary }]}>Max Age</Text>
                   <View style={styles.ageButtons}>
-                    <TouchableOpacity
-                      style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]}
-                      onPress={() => setAgeMax(Math.max(ageMin + 1, ageMax - 1))}
-                    >
+                    <TouchableOpacity style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]} onPress={() => setAgeMax(Math.max(ageMin + 1, ageMax - 1))}>
                       <Ionicons name="remove" size={18} color={colors.text} />
                     </TouchableOpacity>
                     <Text style={[styles.ageValue, { color: colors.text }]}>{ageMax}</Text>
-                    <TouchableOpacity
-                      style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]}
-                      onPress={() => setAgeMax(Math.min(65, ageMax + 1))}
-                    >
+                    <TouchableOpacity style={[styles.ageBtn, { backgroundColor: colors.surfaceSecondary }]} onPress={() => setAgeMax(Math.min(65, ageMax + 1))}>
                       <Ionicons name="add" size={18} color={colors.text} />
                     </TouchableOpacity>
                   </View>
@@ -416,9 +376,7 @@ export default function CreateAd() {
                     <Text style={[styles.locationChipText, { color: locations.includes(code) ? colors.primary : colors.textSecondary }]}>
                       {LOCATION_NAMES[code]}
                     </Text>
-                    {locations.includes(code) && (
-                      <Ionicons name="checkmark" size={12} color={colors.primary} />
-                    )}
+                    {locations.includes(code) && <Ionicons name="checkmark" size={12} color={colors.primary} />}
                   </TouchableOpacity>
                 ))}
               </View>
@@ -460,22 +418,25 @@ export default function CreateAd() {
                 ))}
               </View>
 
-              {/* Cost breakdown */}
+              {/* Budget summary */}
               <View style={[styles.breakdown, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <Text style={[styles.breakdownTitle, { color: colors.text }]}>Cost Breakdown</Text>
+                <Text style={[styles.breakdownTitle, { color: colors.text }]}>Budget Summary</Text>
                 <View style={styles.breakdownRow}>
-                  <Text style={[styles.breakdownLabel, { color: colors.textSecondary }]}>Ad Spend ({durationDays} days)</Text>
-                  <Text style={[styles.breakdownValue, { color: colors.text }]}>₦{budget.toLocaleString()}</Text>
+                  <Text style={[styles.breakdownLabel, { color: colors.textSecondary }]}>Daily budget</Text>
+                  <Text style={[styles.breakdownValue, { color: colors.text }]}>₦{parseFloat(dailyBudget || '0').toLocaleString()}/day</Text>
                 </View>
                 <View style={styles.breakdownRow}>
-                  <Text style={[styles.breakdownLabel, { color: colors.textSecondary }]}>CartY Service Fee (15%)</Text>
-                  <Text style={[styles.breakdownValue, { color: colors.text }]}>₦{fee.toLocaleString()}</Text>
+                  <Text style={[styles.breakdownLabel, { color: colors.textSecondary }]}>Duration</Text>
+                  <Text style={[styles.breakdownValue, { color: colors.text }]}>{durationDays} days</Text>
                 </View>
                 <View style={[styles.breakdownDivider, { backgroundColor: colors.border }]} />
                 <View style={styles.breakdownRow}>
-                  <Text style={[styles.breakdownTotalLabel, { color: colors.text }]}>Total</Text>
-                  <Text style={[styles.breakdownTotal, { color: colors.primary }]}>₦{total.toLocaleString()}</Text>
+                  <Text style={[styles.breakdownTotalLabel, { color: colors.text }]}>Total ad spend</Text>
+                  <Text style={[styles.breakdownTotal, { color: colors.primary }]}>₦{budget.toLocaleString()}</Text>
                 </View>
+                <Text style={[styles.breakdownNote, { color: colors.textSecondary }]}>
+                  Charged directly to your {platform === 'meta' ? 'Meta' : 'TikTok'} ad account.
+                </Text>
               </View>
 
               <View style={[styles.reachEstimate, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
@@ -487,105 +448,62 @@ export default function CreateAd() {
             </View>
           )}
 
-          {/* ——— Step 4: Payment ——— */}
+          {/* ——— Step 4: Review & Launch ——— */}
           {step === 4 && (
             <View style={styles.stepContent}>
-              {/* Summary */}
+              {/* Campaign summary */}
               <View style={[styles.summary, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                 <Text style={[styles.summaryTitle, { color: colors.text }]}>Campaign Summary</Text>
-                <SummaryRow label="Platform" value={platform === 'meta' ? 'Meta (Facebook & Instagram)' : 'TikTok'} colors={colors} />
+                {platformCfg && (
+                  <View style={styles.summaryPlatformRow}>
+                    <View style={[styles.summaryPlatformIcon, { backgroundColor: platformCfg.color + '22' }]}>
+                      <Ionicons name={platformCfg.icon as any} size={18} color={platformCfg.color} />
+                    </View>
+                    <Text style={[styles.summaryPlatformName, { color: colors.text }]}>{platformCfg.label}</Text>
+                    <View style={styles.connectedBadge}>
+                      <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                      <Text style={styles.connectedBadgeText}>Connected</Text>
+                    </View>
+                  </View>
+                )}
                 <SummaryRow label="Objective" value={objective.charAt(0).toUpperCase() + objective.slice(1)} colors={colors} />
                 <SummaryRow label="Headline" value={headline} colors={colors} />
-                <SummaryRow label="Duration" value={`${durationDays} days`} colors={colors} />
                 <SummaryRow label="Audience" value={`${ageMin}–${ageMax} yrs · ${gender}`} colors={colors} />
+                <SummaryRow label="Locations" value={locations.map(c => LOCATION_NAMES[c]).join(', ')} colors={colors} />
+                <SummaryRow label="Duration" value={`${durationDays} days`} colors={colors} />
                 <View style={[styles.summaryTotal, { borderTopColor: colors.border }]}>
-                  <Text style={[styles.summaryTotalLabel, { color: colors.textSecondary }]}>Total to Pay</Text>
-                  <Text style={[styles.summaryTotalValue, { color: colors.primary }]}>₦{total.toLocaleString()}</Text>
+                  <Text style={[styles.summaryTotalLabel, { color: colors.textSecondary }]}>Total Ad Spend</Text>
+                  <Text style={[styles.summaryTotalValue, { color: colors.primary }]}>₦{budget.toLocaleString()}</Text>
                 </View>
               </View>
 
-              {!otpStep ? (
-                <>
-                  <Text style={[styles.stepLabel, { color: colors.textSecondary, marginTop: 20 }]}>CARD DETAILS</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                    value={cardNumber}
-                    onChangeText={t => setCardNumber(formatCardNumber(t))}
-                    placeholder="Card Number"
-                    placeholderTextColor={colors.textTertiary}
-                    keyboardType="numeric"
-                    maxLength={19}
-                  />
-                  <View style={styles.cardRow}>
-                    <TextInput
-                      style={[styles.input, styles.cardHalf, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                      value={expiry}
-                      onChangeText={t => setExpiry(formatExpiry(t))}
-                      placeholder="MM/YY"
-                      placeholderTextColor={colors.textTertiary}
-                      keyboardType="numeric"
-                      maxLength={5}
-                    />
-                    <TextInput
-                      style={[styles.input, styles.cardHalf, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                      value={cvv}
-                      onChangeText={t => setCvv(t.replace(/\D/g, '').slice(0, 4))}
-                      placeholder="CVV"
-                      placeholderTextColor={colors.textTertiary}
-                      keyboardType="numeric"
-                      maxLength={4}
-                      secureTextEntry
-                    />
-                  </View>
-                  {error ? <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text> : null}
-                  <TouchableOpacity
-                    style={[styles.payBtn, { backgroundColor: colors.primary, opacity: submitting ? 0.7 : 1 }]}
-                    onPress={handlePay}
-                    disabled={submitting}
-                  >
-                    {submitting
-                      ? <ActivityIndicator color="#fff" />
-                      : <Text style={styles.payBtnText}>Pay ₦{total.toLocaleString()}</Text>
-                    }
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                  <View style={[styles.otpInfo, { backgroundColor: colors.primaryLight }]}>
-                    <Ionicons name="shield-checkmark-outline" size={20} color={colors.primary} />
-                    <Text style={[styles.otpInfoText, { color: colors.primary }]}>
-                      Your bank sent an OTP to verify this payment.
-                    </Text>
-                  </View>
-                  <Text style={[styles.stepLabel, { color: colors.textSecondary, marginTop: 16 }]}>ENTER OTP</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                    value={otp}
-                    onChangeText={t => setOtp(t.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="Enter OTP"
-                    placeholderTextColor={colors.textTertiary}
-                    keyboardType="numeric"
-                    maxLength={6}
-                  />
-                  {error ? <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text> : null}
-                  <TouchableOpacity
-                    style={[styles.payBtn, { backgroundColor: colors.primary, opacity: submitting ? 0.7 : 1 }]}
-                    onPress={handleOtp}
-                    disabled={submitting}
-                  >
-                    {submitting
-                      ? <ActivityIndicator color="#fff" />
-                      : <Text style={styles.payBtnText}>Verify & Pay</Text>
-                    }
-                  </TouchableOpacity>
-                </>
-              )}
+              <View style={[styles.launchNote, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}>
+                <Ionicons name="information-circle-outline" size={18} color={colors.primary} />
+                <Text style={[styles.launchNoteText, { color: colors.primary }]}>
+                  The campaign will be created in your {platformCfg?.label} Ads account and budget charged from your ad account balance.
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.launchBtn, { backgroundColor: colors.primary, opacity: submitting ? 0.7 : 1 }]}
+                onPress={handleLaunch}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="rocket-outline" size={20} color="#fff" />
+                    <Text style={styles.launchBtnText}>Launch Campaign</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             </View>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Next / Back buttons */}
+      {/* Next button (steps 0–3) */}
       {step < STEPS.length - 1 && (
         <View style={[styles.footer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
           <TouchableOpacity
@@ -593,9 +511,7 @@ export default function CreateAd() {
             onPress={() => canNext() && setStep(step + 1)}
             disabled={!canNext()}
           >
-            <Text style={[styles.nextBtnText, { color: canNext() ? '#fff' : colors.textTertiary }]}>
-              Continue
-            </Text>
+            <Text style={[styles.nextBtnText, { color: canNext() ? '#fff' : colors.textTertiary }]}>Continue</Text>
             <Ionicons name="arrow-forward" size={18} color={canNext() ? '#fff' : colors.textTertiary} />
           </TouchableOpacity>
         </View>
@@ -629,7 +545,7 @@ const styles = StyleSheet.create({
   stepContent: { gap: 4 },
   stepLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: 10, marginTop: 4 },
 
-  // Option cards (Platform / Objective)
+  // Platform option cards
   optionCard: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
     borderRadius: 14, padding: 16, marginBottom: 10,
@@ -637,6 +553,8 @@ const styles = StyleSheet.create({
   optionIcon: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   optionLabel: { fontSize: 16, fontWeight: '700' },
   optionSub: { fontSize: 13, marginTop: 2 },
+  connectedDot: { width: 10, height: 10, borderRadius: 5 },
+  notConnectedText: { fontSize: 12, fontWeight: '500' },
 
   // Creative
   imagePicker: { borderRadius: 14, borderWidth: 1.5, borderStyle: 'dashed', overflow: 'hidden' },
@@ -688,27 +606,33 @@ const styles = StyleSheet.create({
   breakdownDivider: { height: 1 },
   breakdownTotalLabel: { fontSize: 15, fontWeight: '700' },
   breakdownTotal: { fontSize: 18, fontWeight: '800' },
+  breakdownNote: { fontSize: 12, marginTop: 4 },
   reachEstimate: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, borderWidth: 1, padding: 12, marginTop: 12 },
   reachText: { flex: 1, fontSize: 13, fontWeight: '500' },
 
-  // Payment
+  // Launch (step 5)
   summary: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 10 },
-  summaryTitle: { fontSize: 15, fontWeight: '700' },
+  summaryTitle: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
+  summaryPlatformRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  summaryPlatformIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  summaryPlatformName: { flex: 1, fontSize: 14, fontWeight: '700' },
+  connectedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#10B98122', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20 },
+  connectedBadgeText: { fontSize: 11, fontWeight: '600', color: '#10B981' },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   summaryLabel: { fontSize: 13 },
   summaryValue: { fontSize: 13, fontWeight: '600', flex: 1, textAlign: 'right', marginLeft: 8 },
   summaryTotal: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, paddingTop: 10, marginTop: 4 },
   summaryTotalLabel: { fontSize: 14, fontWeight: '600' },
   summaryTotalValue: { fontSize: 20, fontWeight: '800' },
-  cardRow: { flexDirection: 'row', gap: 10 },
-  cardHalf: { flex: 1 },
-  errorText: { fontSize: 13, textAlign: 'center', marginTop: 4 },
-  payBtn: { borderRadius: 14, height: 54, alignItems: 'center', justifyContent: 'center', marginTop: 12 },
-  payBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  otpInfo: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, padding: 14 },
-  otpInfoText: { flex: 1, fontSize: 14, lineHeight: 20 },
+  launchNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 12, borderWidth: 1, padding: 14, marginTop: 12 },
+  launchNoteText: { flex: 1, fontSize: 13, lineHeight: 20 },
+  launchBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    borderRadius: 14, height: 56, marginTop: 16,
+  },
+  launchBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
 
-  // Footer (next button)
+  // Footer
   footer: { padding: 16, borderTopWidth: 1 },
   nextBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, height: 54 },
   nextBtnText: { fontSize: 16, fontWeight: '700' },
