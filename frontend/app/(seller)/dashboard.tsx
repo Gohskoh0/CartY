@@ -1,16 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  RefreshControl,
-  Share,
-  Alert,
-  ActivityIndicator,
-  Clipboard,
-  Platform,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  RefreshControl, Share, Alert, ActivityIndicator, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -18,6 +9,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { useTheme } from '../../src/context/ThemeContext';
 import { api } from '../../src/services/api';
+import * as Clipboard from 'expo-clipboard';
+
+function StatCard({ icon, label, value, iconBg, iconColor }: any) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.statCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={[styles.statIcon, { backgroundColor: iconBg }]}>
+        <Ionicons name={icon} size={20} color={iconColor} />
+      </View>
+      <Text style={[styles.statValue, { color: colors.text }]}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{label}</Text>
+    </View>
+  );
+}
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -26,11 +31,10 @@ export default function Dashboard() {
   const [dashboard, setDashboard] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [balanceVisible, setBalanceVisible] = useState(true);
 
   useEffect(() => {
-    if (user && !user.has_store) {
-      router.replace('/(seller)/create-store');
-    }
+    if (user && !user.has_store) router.replace('/(seller)/create-store');
   }, [user]);
 
   const fetchDashboard = async () => {
@@ -43,73 +47,38 @@ export default function Dashboard() {
         router.replace('/(seller)/create-store');
         return;
       }
-      console.log('Dashboard error:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  useEffect(() => {
-    fetchDashboard();
-  }, []);
+  useEffect(() => { fetchDashboard(); }, []);
 
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    fetchDashboard();
-  }, []);
+  const onRefresh = useCallback(() => { setRefreshing(true); fetchDashboard(); }, []);
 
-  const getStoreUrl = () => {
-    const baseUrl = process.env.EXPO_PUBLIC_BACKEND_URL || '';
-    return `${baseUrl}/store/${dashboard?.store_slug}`;
-  };
+  const getStoreUrl = () => `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/store/${dashboard?.store_slug}`;
 
   const handleShareStore = async () => {
-    if (!dashboard?.store_slug) {
-      Alert.alert('Store Not Ready', 'Please create your store first to share it.');
-      return;
-    }
-    
-    const storeUrl = getStoreUrl();
-    
+    if (!dashboard?.store_slug) return Alert.alert('Not ready', 'Create your store first.');
     try {
-      const result = await Share.share({
-        message: `🛒 Check out my store on CartY!\n\n${storeUrl}`,
-        title: 'Share My Store',
-      });
-      
-      if (result.action === Share.dismissedAction) {
-        // User dismissed
-      }
-    } catch (error) {
-      // Fallback to copy to clipboard if share fails
-      handleCopyLink();
+      await Share.share({ message: `Check out my store on CartY!\n\n${getStoreUrl()}` });
+    } catch {
+      await Clipboard.setStringAsync(getStoreUrl());
+      Alert.alert('Copied!', 'Store link copied to clipboard');
     }
   };
 
   const handleCopyLink = async () => {
-    if (!dashboard?.store_slug) {
-      Alert.alert('Store Not Ready', 'Please create your store first.');
-      return;
-    }
-    const storeUrl = getStoreUrl();
-    
-    try {
-      if (Platform.OS === 'web') {
-        await navigator.clipboard.writeText(storeUrl);
-      } else {
-        Clipboard.setString(storeUrl);
-      }
-      Alert.alert('Copied!', 'Store link copied to clipboard');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to copy link');
-    }
+    if (!dashboard?.store_slug) return;
+    await Clipboard.setStringAsync(getStoreUrl());
+    Alert.alert('Copied!', 'Store link copied to clipboard');
   };
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={styles.loadingContainer}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]}>
+        <View style={styles.loader}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </SafeAreaView>
@@ -117,322 +86,293 @@ export default function Dashboard() {
   }
 
   const isSubscribed = dashboard?.subscription_status === 'active';
+  const storeName = dashboard?.store_name || user?.phone || 'Your Store';
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScrollView
-        style={styles.scrollView}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
-        }
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={[styles.header, { backgroundColor: colors.surface }]}>
-          <View>
-            <Text style={[styles.greeting, { color: colors.textSecondary }]}>Welcome back!</Text>
-            <Text style={[styles.storeName, { color: colors.text }]}>{user?.phone}</Text>
+    <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
+      {/* Fixed Header */}
+      <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+        <View style={styles.headerLeft}>
+          <View style={[styles.storeAvatar, { backgroundColor: colors.primaryLight }]}>
+            <Text style={[styles.storeAvatarText, { color: colors.primary }]}>
+              {(storeName[0] || 'S').toUpperCase()}
+            </Text>
           </View>
-          <TouchableOpacity style={[styles.shareButton, { backgroundColor: colors.primaryLight }]} onPress={handleShareStore}>
-            <Ionicons name="share-social-outline" size={24} color={colors.primary} />
-          </TouchableOpacity>
+          <View>
+            <Text style={[styles.greeting, { color: colors.textSecondary }]}>{greeting} 👋</Text>
+            <Text style={[styles.storeName, { color: colors.text }]} numberOfLines={1}>{storeName}</Text>
+          </View>
         </View>
+        <TouchableOpacity
+          onPress={() => router.push('/(seller)/settings')}
+          style={[styles.settingsBtn, { backgroundColor: colors.surfaceSecondary }]}
+        >
+          <Ionicons name="settings-outline" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+      </View>
 
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+      >
+
+        {/* Subscription Banner */}
         {!isSubscribed && (
           <TouchableOpacity
-            style={[styles.subscriptionBanner, { backgroundColor: colors.primary }]}
+            style={[styles.subBanner, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}
             onPress={() => router.push('/(seller)/subscribe')}
           >
-            <View style={styles.bannerContent}>
-              <Ionicons name="lock-closed" size={24} color="#FFFFFF" />
-              <View style={styles.bannerText}>
-                <Text style={styles.bannerTitle}>Activate Your Store</Text>
-                <Text style={styles.bannerSubtitle}>
-                  Subscribe for $7/month to start accepting payments
-                </Text>
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={24} color="#FFFFFF" />
+            <Ionicons name="flash" size={16} color={colors.primary} />
+            <Text style={[styles.subBannerText, { color: colors.primary }]}>
+              Activate your store to accept payments — $7/month
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.primary} />
           </TouchableOpacity>
         )}
 
-        {isSubscribed && (
-          <View style={[styles.activeBadge, { backgroundColor: colors.successLight }]}>
-            <Ionicons name="checkmark-circle" size={20} color={colors.success} />
-            <Text style={[styles.activeBadgeText, { color: colors.success }]}>Store Active</Text>
-          </View>
-        )}
-
-        <View style={styles.statsGrid}>
-          <View style={[styles.statCard, { backgroundColor: colors.surface }]}>
-            <View style={[styles.statIcon, { backgroundColor: colors.primaryLight }]}>
-              <Ionicons name="cart-outline" size={24} color={colors.primary} />
+        {/* Balance Card */}
+        <View style={[styles.balanceCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.balanceHeader}>
+            <View>
+              <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Wallet Balance</Text>
+              {balanceVisible ? (
+                <Text style={[styles.balanceAmount, { color: colors.text }]}>
+                  ₦{(dashboard?.wallet_balance || 0).toLocaleString()}
+                </Text>
+              ) : (
+                <Text style={[styles.balanceHidden, { color: colors.text }]}>••••••</Text>
+              )}
             </View>
-            <Text style={[styles.statValue, { color: colors.text }]}>{dashboard?.total_orders || 0}</Text>
-            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Total Orders</Text>
+            <TouchableOpacity onPress={() => setBalanceVisible(v => !v)}>
+              <Ionicons name={balanceVisible ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.textSecondary} />
+            </TouchableOpacity>
           </View>
-
-          <View style={[styles.statCard, { backgroundColor: colors.surface }]}>
-            <View style={[styles.statIcon, { backgroundColor: colors.successLight }]}>
-              <Ionicons name="trending-up-outline" size={24} color={colors.success} />
-            </View>
-            <Text style={[styles.statValue, { color: colors.text }]}>
-              ₦{(dashboard?.total_sales || 0).toLocaleString()}
-            </Text>
-            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Total Sales</Text>
-          </View>
-
-          <View style={[styles.statCard, { backgroundColor: colors.surface }]}>
-            <View style={[styles.statIcon, { backgroundColor: colors.warningLight }]}>
-              <Ionicons name="wallet-outline" size={24} color={colors.warning} />
-            </View>
-            <Text style={[styles.statValue, { color: colors.text }]}>
-              ₦{(dashboard?.wallet_balance || 0).toLocaleString()}
-            </Text>
-            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Wallet Balance</Text>
-          </View>
-
-          <View style={[styles.statCard, { backgroundColor: colors.surface }]}>
-            <View style={[styles.statIcon, { backgroundColor: colors.errorLight }]}>
-              <Ionicons name="cube-outline" size={24} color={colors.error} />
-            </View>
-            <Text style={[styles.statValue, { color: colors.text }]}>{dashboard?.products_count || 0}</Text>
-            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Products</Text>
+          <View style={styles.balanceActions}>
+            <TouchableOpacity
+              style={[styles.balanceAction, { backgroundColor: colors.primary }]}
+              onPress={() => router.push('/(seller)/wallet')}
+            >
+              <Ionicons name="arrow-up-outline" size={16} color="#fff" />
+              <Text style={styles.balanceActionText}>Withdraw</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.balanceAction, { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border }]}
+              onPress={() => router.push('/(seller)/wallet')}
+            >
+              <Ionicons name="card-outline" size={16} color={colors.text} />
+              <Text style={[styles.balanceActionText, { color: colors.text }]}>Bank Setup</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
+        {/* Stats Grid */}
+        <View style={styles.statsGrid}>
+          <View style={styles.statsRow}>
+            <StatCard
+              icon="receipt-outline" label="Orders" value={dashboard?.total_orders || 0}
+              iconBg={colors.primaryLight} iconColor={colors.primary}
+            />
+            <StatCard
+              icon="trending-up-outline" label="Revenue" value={`₦${((dashboard?.total_sales || 0) / 1000).toFixed(0)}K`}
+              iconBg={colors.successLight} iconColor={colors.accent}
+            />
+          </View>
+          <View style={styles.statsRow}>
+            <StatCard
+              icon="cube-outline" label="Products" value={dashboard?.products_count || 0}
+              iconBg={colors.warningLight} iconColor={colors.warning}
+            />
+            <StatCard
+              icon="cash-outline" label="Earnings" value={`₦${((dashboard?.total_earnings || 0) / 1000).toFixed(0)}K`}
+              iconBg={colors.primaryLight} iconColor={colors.primary}
+            />
+          </View>
+        </View>
+
+        {/* Quick Actions */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Quick Actions</Text>
-          <View style={styles.actionButtons}>
+          <View style={styles.actionsRow}>
             <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              style={[styles.actionBtn, { backgroundColor: colors.primary }]}
               onPress={() => router.push('/(seller)/add-product')}
             >
-              <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
-              <Text style={[styles.actionButtonText, { color: colors.primary }]}>Add Product</Text>
+              <Ionicons name="add-circle-outline" size={20} color="#fff" />
+              <Text style={styles.actionBtnText}>Add Product</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.actionButton, { backgroundColor: colors.surface, borderColor: colors.border }]} 
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }]}
               onPress={handleShareStore}
             >
-              <Ionicons name="link-outline" size={24} color={colors.primary} />
-              <Text style={[styles.actionButtonText, { color: colors.primary }]}>Share Store</Text>
+              <Ionicons name="share-social-outline" size={20} color={colors.primary} />
+              <Text style={[styles.actionBtnText, { color: colors.primary }]}>Share Store</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }]}
+              onPress={handleCopyLink}
+            >
+              <Ionicons name="link-outline" size={20} color={colors.textSecondary} />
+              <Text style={[styles.actionBtnText, { color: colors.textSecondary }]}>Copy Link</Text>
             </TouchableOpacity>
           </View>
         </View>
 
+        {/* Recent Orders */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Orders</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Orders</Text>
+            <TouchableOpacity onPress={() => router.push('/(seller)/orders')}>
+              <Text style={[styles.seeAll, { color: colors.primary }]}>See all</Text>
+            </TouchableOpacity>
+          </View>
+
           {dashboard?.recent_orders?.length > 0 ? (
-            dashboard.recent_orders.map((order: any) => (
-              <View key={order.id} style={[styles.orderCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <View style={styles.orderHeader}>
-                  <Text style={[styles.orderBuyer, { color: colors.text }]}>{order.buyer_name}</Text>
-                  <View
-                    style={[
-                      styles.orderStatus,
-                      { backgroundColor: colors.warningLight },
-                      order.status === 'completed' && { backgroundColor: colors.successLight },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.orderStatusText,
-                        { color: colors.warning },
-                        order.status === 'completed' && { color: colors.success },
-                      ]}
-                    >
-                      {order.status}
+            dashboard.recent_orders.map((order: any) => {
+              const isCompleted = order.status === 'completed';
+              const initials = (order.buyer_name || '?')[0].toUpperCase();
+              return (
+                <View
+                  key={order.id}
+                  style={[styles.orderCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+                >
+                  <View style={[styles.orderAvatar, { backgroundColor: colors.primaryLight }]}>
+                    <Text style={[styles.orderAvatarText, { color: colors.primary }]}>{initials}</Text>
+                  </View>
+                  <View style={styles.orderInfo}>
+                    <Text style={[styles.orderBuyer, { color: colors.text }]}>{order.buyer_name}</Text>
+                    <Text style={[styles.orderDate, { color: colors.textSecondary }]}>
+                      {new Date(order.created_at).toLocaleDateString()}
                     </Text>
                   </View>
+                  <View style={styles.orderRight}>
+                    <Text style={[styles.orderAmount, { color: colors.text }]}>
+                      ₦{(order.total_amount || 0).toLocaleString()}
+                    </Text>
+                    <View style={[styles.statusBadge, { backgroundColor: isCompleted ? colors.successLight : colors.warningLight }]}>
+                      <Text style={[styles.statusText, { color: isCompleted ? colors.accent : colors.warning }]}>
+                        {order.status}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
-                <Text style={[styles.orderAmount, { color: colors.text }]}>
-                  ₦{(order.total_amount || 0).toLocaleString()}
-                </Text>
-                <Text style={[styles.orderDate, { color: colors.textSecondary }]}>
-                  {new Date(order.created_at).toLocaleDateString()}
-                </Text>
-              </View>
-            ))
+              );
+            })
           ) : (
-            <View style={[styles.emptyState, { backgroundColor: colors.surface }]}>
+            <View style={[styles.emptyState, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Ionicons name="receipt-outline" size={48} color={colors.textTertiary} />
-              <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No orders yet</Text>
-              <Text style={[styles.emptySubtext, { color: colors.textTertiary }]}>Share your store link to get started!</Text>
+              <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>No orders yet</Text>
+              <Text style={[styles.emptySubtitle, { color: colors.textTertiary }]}>Share your store link to start selling!</Text>
             </View>
           )}
         </View>
+
+        {isSubscribed && (
+          <View style={[styles.activeIndicator, { backgroundColor: colors.successLight, borderColor: colors.accent }]}>
+            <Ionicons name="checkmark-circle" size={16} color={colors.accent} />
+            <Text style={[styles.activeText, { color: colors.accent }]}>
+              Store active · expires {dashboard?.subscription_end_date ? new Date(dashboard.subscription_end_date).toLocaleDateString() : 'N/A'}
+            </Text>
+          </View>
+        )}
+
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scrollView: {
-    flex: 1,
-  },
+  safe: { flex: 1 },
+  loader: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 16,
+    borderBottomWidth: 1,
   },
-  greeting: {
-    fontSize: 14,
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  storeAvatar: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center',
   },
-  storeName: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginTop: 4,
+  storeAvatarText: { fontSize: 20, fontWeight: '800' },
+  greeting: { fontSize: 12, marginBottom: 2 },
+  storeName: { fontSize: 17, fontWeight: '700', maxWidth: 200 },
+  settingsBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+
+  subBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 16, marginTop: 12, paddingHorizontal: 14, paddingVertical: 10,
+    borderRadius: 10, borderWidth: 1,
   },
-  shareButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
+  subBannerText: { flex: 1, fontSize: 13, fontWeight: '600' },
+
+  balanceCard: {
+    margin: 16, borderRadius: 16, padding: 20, borderWidth: 1,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8,
+    elevation: 4,
   },
-  subscriptionBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    margin: 16,
-    padding: 16,
-    borderRadius: 12,
+  balanceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
+  balanceLabel: { fontSize: 13, marginBottom: 6 },
+  balanceAmount: { fontSize: 32, fontWeight: '800', letterSpacing: -0.5 },
+  balanceHidden: { fontSize: 32, fontWeight: '800' },
+  balanceActions: { flexDirection: 'row', gap: 10 },
+  balanceAction: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10,
   },
-  bannerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  bannerText: {
-    marginLeft: 12,
-    flex: 1,
-  },
-  bannerTitle: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  bannerSubtitle: {
-    color: '#C7D2FE',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  activeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    margin: 16,
-    padding: 12,
-    borderRadius: 8,
-  },
-  activeBadgeText: {
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    padding: 8,
-  },
+  balanceActionText: { color: '#fff', fontWeight: '600', fontSize: 13 },
+
+  statsGrid: { paddingHorizontal: 16, gap: 8, marginTop: 0 },
+  statsRow: { flexDirection: 'row', gap: 8 },
   statCard: {
-    width: '50%',
-    padding: 8,
+    flex: 1, padding: 16,
+    borderRadius: 14, borderWidth: 1,
   },
   statIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
+    width: 40, height: 40, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-  statValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
+  statValue: { fontSize: 22, fontWeight: '800', letterSpacing: -0.3 },
+  statLabel: { fontSize: 12, marginTop: 3 },
+
+  section: { paddingHorizontal: 16, marginTop: 20 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sectionTitle: { fontSize: 17, fontWeight: '700', marginBottom: 12 },
+  seeAll: { fontSize: 13, fontWeight: '600' },
+
+  actionsRow: { flexDirection: 'row', gap: 8 },
+  actionBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 11, borderRadius: 12,
   },
-  statLabel: {
-    fontSize: 14,
-    marginTop: 4,
-  },
-  section: {
-    padding: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16,
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  actionButtonText: {
-    fontWeight: '600',
-    marginLeft: 8,
-  },
+  actionBtnText: { color: '#fff', fontWeight: '600', fontSize: 13 },
+
   orderCard: {
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 14, borderRadius: 14, marginBottom: 8, borderWidth: 1,
   },
-  orderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  orderBuyer: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  orderStatus: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  orderStatusText: {
-    fontSize: 12,
-    fontWeight: '500',
-    textTransform: 'capitalize',
-  },
-  orderAmount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  orderDate: {
-    fontSize: 12,
-    marginTop: 4,
-  },
+  orderAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  orderAvatarText: { fontWeight: '700', fontSize: 16 },
+  orderInfo: { flex: 1 },
+  orderBuyer: { fontSize: 14, fontWeight: '600' },
+  orderDate: { fontSize: 12, marginTop: 2 },
+  orderRight: { alignItems: 'flex-end', gap: 4 },
+  orderAmount: { fontSize: 15, fontWeight: '700' },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  statusText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
+
   emptyState: {
-    alignItems: 'center',
-    padding: 32,
-    borderRadius: 12,
+    alignItems: 'center', padding: 36, borderRadius: 16, borderWidth: 1,
   },
-  emptyText: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 16,
+  emptyTitle: { fontSize: 15, fontWeight: '600', marginTop: 12 },
+  emptySubtitle: { fontSize: 13, marginTop: 4, textAlign: 'center' },
+
+  activeIndicator: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginHorizontal: 16, marginTop: 16, padding: 12, borderRadius: 10, borderWidth: 1,
   },
-  emptySubtext: {
-    fontSize: 14,
-    marginTop: 4,
-  },
+  activeText: { fontSize: 13, fontWeight: '500' },
 });

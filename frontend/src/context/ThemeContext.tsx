@@ -8,54 +8,72 @@ interface ThemeColors {
   background: string;
   surface: string;
   surfaceSecondary: string;
+  surfaceElevated: string;
   text: string;
   textSecondary: string;
   textTertiary: string;
   primary: string;
   primaryLight: string;
+  primaryGradient: [string, string];
+  accent: string;
   border: string;
+  borderLight: string;
   success: string;
   successLight: string;
   warning: string;
   warningLight: string;
   error: string;
   errorLight: string;
+  tabBar: string;
+  tabBarBorder: string;
 }
 
 const lightColors: ThemeColors = {
-  background: '#F9FAFB',
+  background: '#F1F5F9',
   surface: '#FFFFFF',
-  surfaceSecondary: '#F3F4F6',
-  text: '#111827',
-  textSecondary: '#6B7280',
-  textTertiary: '#9CA3AF',
+  surfaceSecondary: '#F8FAFC',
+  surfaceElevated: '#FFFFFF',
+  text: '#0F172A',
+  textSecondary: '#475569',
+  textTertiary: '#94A3B8',
   primary: '#4F46E5',
   primaryLight: '#EEF2FF',
-  border: '#E5E7EB',
+  primaryGradient: ['#6366F1', '#8B5CF6'],
+  accent: '#10B981',
+  border: '#E2E8F0',
+  borderLight: '#F1F5F9',
   success: '#10B981',
   successLight: '#ECFDF5',
   warning: '#F59E0B',
   warningLight: '#FEF3C7',
   error: '#EF4444',
   errorLight: '#FEE2E2',
+  tabBar: '#FFFFFF',
+  tabBarBorder: '#E2E8F0',
 };
 
 const darkColors: ThemeColors = {
-  background: '#0F172A',
-  surface: '#1E293B',
-  surfaceSecondary: '#334155',
-  text: '#F1F5F9',
+  background: '#0A0F1E',
+  surface: '#111827',
+  surfaceSecondary: '#1F2A3C',
+  surfaceElevated: '#243044',
+  text: '#F8FAFC',
   textSecondary: '#94A3B8',
-  textTertiary: '#64748B',
+  textTertiary: '#4B5563',
   primary: '#6366F1',
-  primaryLight: '#312E81',
-  border: '#334155',
+  primaryLight: '#1E1B4B',
+  primaryGradient: ['#6366F1', '#8B5CF6'],
+  accent: '#10B981',
+  border: '#2D3B52',
+  borderLight: '#1F2A3C',
   success: '#10B981',
-  successLight: '#064E3B',
-  warning: '#F59E0B',
-  warningLight: '#78350F',
-  error: '#EF4444',
-  errorLight: '#7F1D1D',
+  successLight: '#052E16',
+  warning: '#FBBF24',
+  warningLight: '#451A03',
+  error: '#F87171',
+  errorLight: '#3B0A0A',
+  tabBar: '#111827',
+  tabBarBorder: '#1F2A3C',
 };
 
 interface ThemeContextType {

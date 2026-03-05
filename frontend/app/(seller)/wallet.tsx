@@ -410,7 +410,7 @@ export default function Wallet() {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         <Text style={[styles.title, { color: colors.text }]}>Wallet</Text>
       </View>
@@ -418,19 +418,20 @@ export default function Wallet() {
       <ScrollView
         style={styles.scrollView}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
         }
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={[styles.balanceCard, { backgroundColor: colors.primary }]}>
-          <Text style={styles.balanceLabel}>Available Balance</Text>
-          <Text style={styles.balanceAmount}>
+        {/* Balance hero card */}
+        <View style={[styles.balanceCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Available Balance</Text>
+          <Text style={[styles.balanceAmount, { color: colors.text }]}>
             ₦{(wallet?.wallet_balance || 0).toLocaleString()}
           </Text>
           <View style={styles.balanceButtons}>
             <TouchableOpacity
-              style={[styles.withdrawButton, !wallet?.bank_account_number && styles.withdrawButtonDisabled]}
+              style={[styles.withdrawButton, { backgroundColor: colors.primary }, !wallet?.bank_account_number && { opacity: 0.5 }]}
               onPress={() => {
                 if (!wallet?.bank_account_number) {
                   showAlert('info', 'Setup Required', 'Please link your bank account first before withdrawing.');
@@ -439,38 +440,52 @@ export default function Wallet() {
                 }
               }}
             >
-              <Text style={[styles.withdrawButtonText, { color: colors.primary }]}>Withdraw</Text>
+              <Ionicons name="arrow-up-outline" size={16} color="#fff" />
+              <Text style={styles.withdrawButtonText}>Withdraw</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.transferButton}
+              style={[styles.transferButton, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}
               onPress={() => setShowTransferModal(true)}
             >
-              <Text style={[styles.withdrawButtonText, { color: colors.primary }]}>Transfer</Text>
+              <Ionicons name="swap-horizontal-outline" size={16} color={colors.text} />
+              <Text style={[styles.transferButtonText, { color: colors.text }]}>Transfer</Text>
             </TouchableOpacity>
+            {!wallet?.bank_account_number && (
+              <TouchableOpacity
+                style={[styles.transferButton, { backgroundColor: colors.primaryLight, borderColor: colors.primary }]}
+                onPress={() => setShowBankModal(true)}
+              >
+                <Ionicons name="card-outline" size={16} color={colors.primary} />
+                <Text style={[styles.transferButtonText, { color: colors.primary }]}>Add Bank</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
+        {/* Stats row */}
         <View style={styles.statsRow}>
-          <View style={[styles.statBox, { backgroundColor: colors.surface }]}>
+          <View style={[styles.statBox, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={[styles.statIcon, { backgroundColor: colors.successLight }]}>
+              <Ionicons name="trending-up-outline" size={16} color={colors.accent} />
+            </View>
+            <Text style={[styles.statValue, { color: colors.text }]}>₦{(wallet?.total_earnings || 0).toLocaleString()}</Text>
             <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Total Earnings</Text>
-            <Text style={[styles.statValue, { color: colors.text }]}>
-              ₦{(wallet?.total_earnings || 0).toLocaleString()}
-            </Text>
           </View>
-          <View style={[styles.statBox, { backgroundColor: colors.surface }]}>
+          <View style={[styles.statBox, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={[styles.statIcon, { backgroundColor: colors.warningLight }]}>
+              <Ionicons name="time-outline" size={16} color={colors.warning} />
+            </View>
+            <Text style={[styles.statValue, { color: colors.text }]}>₦{(wallet?.pending_balance || 0).toLocaleString()}</Text>
             <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Pending</Text>
-            <Text style={[styles.statValue, { color: colors.text }]}>
-              ₦{(wallet?.pending_balance || 0).toLocaleString()}
-            </Text>
           </View>
         </View>
 
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Bank Account</Text>
           {wallet?.bank_account_number ? (
-            <View style={[styles.bankCard, { backgroundColor: colors.surface }]}>
-              <View style={[styles.bankIcon, { backgroundColor: colors.primaryLight }]}>
-                <Ionicons name="business-outline" size={24} color={colors.primary} />
+            <View style={[styles.bankCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <View style={[styles.bankIcon2, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="business-outline" size={22} color={colors.primary} />
               </View>
               <View style={styles.bankInfo}>
                 <Text style={[styles.bankName, { color: colors.text }]}>{wallet.bank_name}</Text>
@@ -478,8 +493,8 @@ export default function Wallet() {
                   {wallet.bank_account_name ? `${wallet.bank_account_name} · ` : ''}****{wallet.bank_account_number.slice(-4)}
                 </Text>
               </View>
-              <TouchableOpacity onPress={handleUnlinkBank} style={styles.unlinkButton}>
-                <Ionicons name="trash-outline" size={20} color={colors.error} />
+              <TouchableOpacity onPress={handleUnlinkBank} style={[styles.unlinkButton, { backgroundColor: colors.errorLight }]}>
+                <Ionicons name="trash-outline" size={18} color={colors.error} />
               </TouchableOpacity>
             </View>
           ) : (
@@ -487,7 +502,7 @@ export default function Wallet() {
               style={[styles.addBankButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
               onPress={() => setShowBankModal(true)}
             >
-              <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
+              <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
               <Text style={[styles.addBankText, { color: colors.primary }]}>Link Bank Account</Text>
             </TouchableOpacity>
           )}
@@ -497,38 +512,34 @@ export default function Wallet() {
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Withdrawal History</Text>
           {wallet?.withdrawals?.length > 0 ? (
             wallet.withdrawals.map((w: any) => (
-              <View key={w.id} style={[styles.withdrawalCard, { backgroundColor: colors.surface }]}>
-                <View>
-                  <Text style={[styles.withdrawalAmount, { color: colors.text }]}>
-                    ₦{(w.amount || 0).toLocaleString()}
-                  </Text>
+              <View key={w.id} style={[styles.withdrawalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <View style={[styles.withdrawalIcon, {
+                  backgroundColor: w.status === 'success' ? colors.successLight : w.status === 'pending' ? colors.warningLight : colors.errorLight
+                }]}>
+                  <Ionicons
+                    name={w.status === 'success' ? 'checkmark' : w.status === 'pending' ? 'time-outline' : 'close'}
+                    size={14}
+                    color={w.status === 'success' ? colors.accent : w.status === 'pending' ? colors.warning : colors.error}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.withdrawalAmount, { color: colors.text }]}>₦{(w.amount || 0).toLocaleString()}</Text>
                   <Text style={[styles.withdrawalDate, { color: colors.textSecondary }]}>
                     {new Date(w.created_at).toLocaleDateString()}
                   </Text>
                 </View>
-                <View
-                  style={[
-                    styles.withdrawalStatus,
-                    { backgroundColor: colors.errorLight },
-                    w.status === 'success' && { backgroundColor: colors.successLight },
-                    w.status === 'pending' && { backgroundColor: colors.warningLight },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.withdrawalStatusText,
-                      { color: colors.error },
-                      w.status === 'success' && { color: colors.success },
-                      w.status === 'pending' && { color: colors.warning },
-                    ]}
-                  >
-                    {w.status}
-                  </Text>
+                <View style={[styles.withdrawalStatus, {
+                  backgroundColor: w.status === 'success' ? colors.successLight : w.status === 'pending' ? colors.warningLight : colors.errorLight
+                }]}>
+                  <Text style={[styles.withdrawalStatusText, {
+                    color: w.status === 'success' ? colors.accent : w.status === 'pending' ? colors.warning : colors.error
+                  }]}>{w.status}</Text>
                 </View>
               </View>
             ))
           ) : (
-            <View style={[styles.emptyState, { backgroundColor: colors.surface }]}>
+            <View style={[styles.emptyState, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Ionicons name="receipt-outline" size={40} color={colors.textTertiary} />
               <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No withdrawals yet</Text>
             </View>
           )}
@@ -1006,38 +1017,44 @@ export default function Wallet() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  header: { padding: 20, borderBottomWidth: 1 },
-  title: { fontSize: 24, fontWeight: 'bold' },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1,
+  },
+  title: { fontSize: 24, fontWeight: '800' },
   scrollView: { flex: 1, padding: 16 },
-  balanceCard: { borderRadius: 16, padding: 24, alignItems: 'center' },
-  balanceLabel: { color: '#C7D2FE', fontSize: 14 },
-  balanceAmount: { color: '#FFFFFF', fontSize: 36, fontWeight: 'bold', marginTop: 8 },
-  balanceButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
-  withdrawButton: { backgroundColor: '#FFFFFF', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8 },
-  transferButton: { backgroundColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 28, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: '#FFFFFF' },
+  balanceCard: { borderRadius: 16, padding: 24, alignItems: 'center', borderWidth: 1 },
+  balanceLabel: { fontSize: 14 },
+  balanceAmount: { fontSize: 36, fontWeight: '800', marginTop: 8 },
+  balanceButtons: { flexDirection: 'row', gap: 10, marginTop: 20, flexWrap: 'wrap', justifyContent: 'center' },
+  withdrawButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12 },
+  transferButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, borderWidth: 1 },
   withdrawButtonDisabled: { opacity: 0.7 },
-  withdrawButtonText: { fontWeight: '600', fontSize: 16 },
+  withdrawButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  transferButtonText: { fontWeight: '600', fontSize: 15 },
   statsRow: { flexDirection: 'row', marginTop: 16, gap: 12 },
-  statBox: { flex: 1, borderRadius: 12, padding: 16, alignItems: 'center' },
-  statLabel: { fontSize: 12 },
-  statValue: { fontSize: 18, fontWeight: 'bold', marginTop: 4 },
+  statBox: { flex: 1, borderRadius: 12, padding: 16, alignItems: 'flex-start', borderWidth: 1 },
+  statIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  statLabel: { fontSize: 12, marginTop: 2 },
+  statValue: { fontSize: 18, fontWeight: '800' },
   section: { marginTop: 24 },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
-  bankCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, padding: 16 },
-  bankIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  sectionTitle: { fontSize: 16, fontWeight: '700', marginBottom: 12 },
+  bankCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, padding: 16, borderWidth: 1 },
+  bankIcon2: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   bankInfo: { flex: 1, marginLeft: 12 },
-  bankName: { fontSize: 16, fontWeight: '600' },
-  accountNumber: { fontSize: 14, marginTop: 2 },
-  unlinkButton: { padding: 8 },
-  addBankButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 12, padding: 20, borderWidth: 2, borderStyle: 'dashed' },
+  bankName: { fontSize: 15, fontWeight: '700' },
+  accountNumber: { fontSize: 13, marginTop: 2 },
+  unlinkButton: { padding: 8, borderRadius: 10 },
+  addBankButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 12, padding: 20, borderWidth: 1.5, borderStyle: 'dashed' },
   addBankText: { fontWeight: '600', marginLeft: 8 },
-  withdrawalCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderRadius: 12, padding: 16, marginBottom: 8 },
-  withdrawalAmount: { fontSize: 16, fontWeight: '600' },
+  withdrawalCard: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1 },
+  withdrawalIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  withdrawalAmount: { fontSize: 15, fontWeight: '700' },
   withdrawalDate: { fontSize: 12, marginTop: 2 },
-  withdrawalStatus: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4 },
-  withdrawalStatusText: { fontSize: 12, fontWeight: '500', textTransform: 'capitalize' },
-  emptyState: { alignItems: 'center', padding: 24, borderRadius: 12 },
-  emptyText: {},
+  withdrawalStatus: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  withdrawalStatusText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
+  emptyState: { alignItems: 'center', padding: 24, borderRadius: 12, gap: 8, borderWidth: 1 },
+  emptyText: { fontSize: 14 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
   bankPickerContent: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, height: '75%' },

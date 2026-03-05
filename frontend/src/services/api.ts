@@ -229,6 +229,71 @@ class ApiService {
   async verifyPayment(slug: string, reference: string) {
     return this.request(`/storefront/${slug}/verify/${reference}`);
   }
+
+  // Push notifications
+  async registerPushToken(push_token: string) {
+    return this.request('/notifications/register', {
+      method: 'PUT',
+      body: JSON.stringify({ push_token }),
+    });
+  }
+
+  // Support chat
+  async supportChat(messages: { role: string; content: string }[]) {
+    return this.request('/support/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages }),
+    });
+  }
+
+  // Ads
+  async createAdCampaign(data: {
+    platform: string;
+    objective: string;
+    ad_headline: string;
+    ad_description: string;
+    ad_image?: string;
+    target_age_min: number;
+    target_age_max: number;
+    target_gender: string;
+    target_locations: string[];
+    budget_ngn: number;
+    start_date?: string;
+    end_date?: string;
+  }) {
+    return this.request('/ads', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getAdCampaigns() {
+    return this.request('/ads');
+  }
+
+  async getAdCampaign(campaignId: string) {
+    return this.request(`/ads/${campaignId}`);
+  }
+
+  async chargeAdCard(data: {
+    campaign_id: string;
+    card_number: string;
+    expiry_month: string;
+    expiry_year: string;
+    cvv: string;
+  }) {
+    return this.request('/ads/charge-card', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async submitAdOtp(reference: string, otp: string, campaign_id: string) {
+    return this.request('/ads/submit-otp', {
+      method: 'POST',
+      body: JSON.stringify({ reference, otp, campaign_id }),
+    });
+  }
 }
 
 export const api = new ApiService();

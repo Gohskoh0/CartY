@@ -166,356 +166,210 @@ export default function Settings() {
     );
   }
 
+  const Row = ({ icon, iconBg, iconColor, title, subtitle, onPress, last }: any) => (
+    <TouchableOpacity
+      style={[styles.row, { borderBottomColor: last ? 'transparent' : colors.border }]}
+      onPress={onPress}
+    >
+      <View style={[styles.rowIcon, { backgroundColor: iconBg }]}>
+        <Ionicons name={icon} size={20} color={iconColor} />
+      </View>
+      <View style={styles.rowContent}>
+        <Text style={[styles.rowTitle, { color: colors.text }]}>{title}</Text>
+        {subtitle ? <Text style={[styles.rowSub, { color: colors.textSecondary }]}>{subtitle}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+    </TouchableOpacity>
+  );
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
         {!editMode ? (
-          <TouchableOpacity onPress={() => setEditMode(true)}>
-            <Text style={[styles.editButton, { color: colors.primary }]}>Edit</Text>
+          <TouchableOpacity
+            style={[styles.editBtn, { backgroundColor: colors.primaryLight }]}
+            onPress={() => setEditMode(true)}
+          >
+            <Text style={[styles.editBtnText, { color: colors.primary }]}>Edit Store</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity onPress={() => { setEditMode(false); Keyboard.dismiss(); }}>
-            <Text style={[styles.cancelButton, { color: colors.textSecondary }]}>Cancel</Text>
+            <Text style={{ color: colors.textSecondary, fontSize: 15, fontWeight: '600' }}>Cancel</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-        <View style={[styles.logoSection, { backgroundColor: colors.surface }]}>
-          <TouchableOpacity onPress={handleUpdateLogo} disabled={saving}>
-            {store?.logo ? (
-              <Image source={{ uri: store.logo }} style={styles.logo} />
-            ) : (
-              <View style={[styles.logoPlaceholder, { backgroundColor: colors.surfaceSecondary }]}>
-                <Ionicons name="storefront-outline" size={48} color={colors.textTertiary} />
-              </View>
-            )}
-            <View style={[styles.cameraIcon, { backgroundColor: colors.primary }]}>
-              <Ionicons name="camera" size={16} color="#FFFFFF" />
-            </View>
-          </TouchableOpacity>
-          <Text style={[styles.storeName, { color: colors.text }]}>{store?.name}</Text>
-          <Text style={[styles.storeSlug, { color: colors.textSecondary }]}>carty.store/{store?.slug}</Text>
-        </View>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
-        <View style={[styles.section, { backgroundColor: colors.surface }]}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Store Information</Text>
-          
-          <Text style={[styles.label, { color: colors.text }]}>Store Name</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: colors.surfaceSecondary, color: colors.text }, !editMode && styles.inputDisabled]}
-            value={name}
-            onChangeText={setName}
-            editable={editMode}
-            placeholderTextColor={colors.textTertiary}
-            returnKeyType="next"
-          />
-
-          <Text style={[styles.label, { color: colors.text }]}>WhatsApp Number</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: colors.surfaceSecondary, color: colors.text }, !editMode && styles.inputDisabled]}
-            value={whatsappNumber}
-            onChangeText={setWhatsappNumber}
-            keyboardType="phone-pad"
-            editable={editMode}
-            placeholderTextColor={colors.textTertiary}
-            returnKeyType="next"
-          />
-
-          <Text style={[styles.label, { color: colors.text }]}>Email (optional)</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: colors.surfaceSecondary, color: colors.text }, !editMode && styles.inputDisabled]}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            editable={editMode}
-            placeholderTextColor={colors.textTertiary}
-            returnKeyType="done"
-            onSubmitEditing={Keyboard.dismiss}
-          />
-
-          {editMode && (
-            <TouchableOpacity
-              style={[styles.saveButton, { backgroundColor: colors.primary }, saving && styles.saveButtonDisabled]}
-              onPress={handleSaveChanges}
-              disabled={saving}
-            >
-              {saving ? (
-                <ActivityIndicator color="#FFFFFF" />
+          {/* Profile hero */}
+          <View style={[styles.profileSection, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={handleUpdateLogo} disabled={saving} style={styles.logoWrap}>
+              {store?.logo ? (
+                <Image source={{ uri: store.logo }} style={styles.logo} />
               ) : (
-                <Text style={styles.saveButtonText}>Save Changes</Text>
+                <View style={[styles.logoPlaceholder, { backgroundColor: colors.primaryLight }]}>
+                  <Text style={[styles.logoInitials, { color: colors.primary }]}>
+                    {(store?.name || 'S')[0].toUpperCase()}
+                  </Text>
+                </View>
               )}
+              <View style={[styles.cameraIcon, { backgroundColor: colors.primary }]}>
+                <Ionicons name="camera" size={14} color="#fff" />
+              </View>
             </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={[styles.section, { backgroundColor: colors.surface }]}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Appearance</Text>
-          
-          <View style={styles.themeOptions}>
-            {themeOptions.map((option) => (
-              <TouchableOpacity
-                key={option.value}
-                style={[
-                  styles.themeOption,
-                  { backgroundColor: colors.surfaceSecondary, borderColor: colors.border },
-                  themeMode === option.value && { borderColor: colors.primary, backgroundColor: colors.primaryLight },
-                ]}
-                onPress={() => setThemeMode(option.value as any)}
-              >
-                <Ionicons
-                  name={option.icon as any}
-                  size={24}
-                  color={themeMode === option.value ? colors.primary : colors.textSecondary}
-                />
-                <Text
-                  style={[
-                    styles.themeOptionText,
-                    { color: themeMode === option.value ? colors.primary : colors.textSecondary },
-                  ]}
-                >
-                  {option.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            <Text style={[styles.storeName, { color: colors.text }]}>{store?.name}</Text>
+            <Text style={[styles.storeSlug, { color: colors.textSecondary }]}>/store/{store?.slug}</Text>
           </View>
-        </View>
 
-        <View style={[styles.section, { backgroundColor: colors.surface }]}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Store Link</Text>
-          
-          <TouchableOpacity style={[styles.actionItem, { borderBottomColor: colors.border }]} onPress={handleShareStore}>
-            <View style={[styles.actionIcon, { backgroundColor: colors.primaryLight }]}>
-              <Ionicons name="share-social-outline" size={24} color={colors.primary} />
+          {/* Store info edit */}
+          {editMode && (
+            <View style={[styles.section, { backgroundColor: colors.surface }]}>
+              <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>STORE INFORMATION</Text>
+              {[
+                { label: 'Store Name', value: name, setter: setName, keyboard: 'default' as const },
+                { label: 'WhatsApp Number', value: whatsappNumber, setter: setWhatsappNumber, keyboard: 'phone-pad' as const },
+                { label: 'Email (optional)', value: email, setter: setEmail, keyboard: 'email-address' as const },
+              ].map((field, i) => (
+                <View key={i}>
+                  <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>{field.label}</Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.surfaceSecondary, color: colors.text, borderColor: colors.border }]}
+                    value={field.value}
+                    onChangeText={field.setter}
+                    keyboardType={field.keyboard}
+                    autoCapitalize="none"
+                    placeholderTextColor={colors.textTertiary}
+                  />
+                </View>
+              ))}
+              <TouchableOpacity
+                style={[styles.saveBtn, { backgroundColor: colors.primary, opacity: saving ? 0.7 : 1 }]}
+                onPress={handleSaveChanges}
+                disabled={saving}
+              >
+                {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Changes</Text>}
+              </TouchableOpacity>
             </View>
-            <View style={styles.actionContent}>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Share Store Link</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.textSecondary }]}>Share your store with customers</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-          </TouchableOpacity>
+          )}
 
-          <TouchableOpacity style={[styles.actionItem, { borderBottomColor: colors.border }]} onPress={handleCopyLink}>
-            <View style={[styles.actionIcon, { backgroundColor: colors.successLight }]}>
-              <Ionicons name="copy-outline" size={24} color={colors.success} />
+          {/* Appearance */}
+          <View style={styles.sectionGap} />
+          <View style={[styles.section, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>APPEARANCE</Text>
+            <View style={styles.themeRow}>
+              {themeOptions.map(o => (
+                <TouchableOpacity
+                  key={o.value}
+                  style={[styles.themeChip, {
+                    backgroundColor: themeMode === o.value ? colors.primaryLight : colors.surfaceSecondary,
+                    borderColor: themeMode === o.value ? colors.primary : colors.border,
+                  }]}
+                  onPress={() => setThemeMode(o.value as any)}
+                >
+                  <Ionicons name={o.icon as any} size={18} color={themeMode === o.value ? colors.primary : colors.textSecondary} />
+                  <Text style={[styles.themeChipText, { color: themeMode === o.value ? colors.primary : colors.textSecondary }]}>
+                    {o.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
-            <View style={styles.actionContent}>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Copy Link</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.textSecondary }]}>Copy store URL to clipboard</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-          </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity style={[styles.actionItem, { borderBottomColor: colors.border }]} onPress={handleOpenStore}>
-            <View style={[styles.actionIcon, { backgroundColor: colors.warningLight }]}>
-              <Ionicons name="open-outline" size={24} color={colors.warning} />
-            </View>
-            <View style={styles.actionContent}>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Preview Store</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.textSecondary }]}>Open your store in browser</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-          </TouchableOpacity>
-        </View>
+          {/* Store Link */}
+          <View style={styles.sectionGap} />
+          <View style={[styles.section, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>STORE LINK</Text>
+            <Row icon="share-social-outline" iconBg={colors.primaryLight} iconColor={colors.primary}
+              title="Share Store Link" subtitle="Share your store with customers" onPress={handleShareStore} />
+            <Row icon="copy-outline" iconBg={colors.successLight} iconColor={colors.accent}
+              title="Copy Link" subtitle="Copy store URL to clipboard" onPress={handleCopyLink} />
+            <Row icon="open-outline" iconBg={colors.warningLight} iconColor={colors.warning}
+              title="Preview Store" subtitle="Open your store in browser" onPress={handleOpenStore} last />
+          </View>
 
-        <View style={[styles.section, { backgroundColor: colors.surface }]}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Account</Text>
-          
+          {/* Account */}
+          <View style={styles.sectionGap} />
+          <View style={[styles.section, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>ACCOUNT</Text>
+            <Row icon="flash-outline" iconBg={colors.successLight} iconColor={colors.accent}
+              title="Subscription"
+              subtitle={`Status: ${store?.subscription_status === 'active' ? '✓ Active' : 'Inactive'}`}
+              onPress={() => router.push('/(seller)/subscribe')} last />
+          </View>
+
+          {/* Logout */}
+          <View style={styles.sectionGap} />
           <TouchableOpacity
-            style={[styles.actionItem, { borderBottomColor: colors.border }]}
-            onPress={() => router.push('/(seller)/subscribe')}
+            style={[styles.logoutBtn, { backgroundColor: colors.surface }]}
+            onPress={handleLogout}
           >
-            <View style={[styles.actionIcon, { backgroundColor: colors.successLight }]}>
-              <Ionicons name="card-outline" size={24} color={colors.success} />
-            </View>
-            <View style={styles.actionContent}>
-              <Text style={[styles.actionTitle, { color: colors.text }]}>Subscription</Text>
-              <Text style={[styles.actionSubtitle, { color: colors.textSecondary }]}>
-                Status: {store?.subscription_status === 'active' ? 'Active' : 'Inactive'}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+            <Ionicons name="log-out-outline" size={20} color={colors.error} />
+            <Text style={[styles.logoutText, { color: colors.error }]}>Sign Out</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Ionicons name="log-out-outline" size={24} color={colors.error} />
-            <Text style={[styles.logoutText, { color: colors.error }]}>Logout</Text>
-          </TouchableOpacity>
-        </View>
-
-        <Text style={[styles.version, { color: colors.textTertiary }]}>CartY v1.0.0</Text>
-      </ScrollView>
+          <Text style={[styles.version, { color: colors.textTertiary }]}>CartY v1.0.0</Text>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  container: { flex: 1 },
+  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
+  title: { fontSize: 24, fontWeight: '800' },
+  editBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10 },
+  editBtnText: { fontSize: 13, fontWeight: '700' },
+  profileSection: {
+    alignItems: 'center', paddingVertical: 28, paddingHorizontal: 20, borderBottomWidth: 1,
   },
-  editButton: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  cancelButton: {
-    fontSize: 16,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  logoSection: {
-    alignItems: 'center',
-    padding: 24,
-  },
-  logo: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-  },
-  logoPlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  logoWrap: { position: 'relative', marginBottom: 14 },
+  logo: { width: 88, height: 88, borderRadius: 44 },
+  logoPlaceholder: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center' },
+  logoInitials: { fontSize: 36, fontWeight: '800' },
   cameraIcon: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    position: 'absolute', bottom: 0, right: 0,
+    width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
   },
-  storeName: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginTop: 16,
-  },
-  storeSlug: {
-    fontSize: 14,
-    marginTop: 4,
-  },
-  section: {
-    padding: 20,
-    marginTop: 16,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 8,
-  },
+  storeName: { fontSize: 20, fontWeight: '800' },
+  storeSlug: { fontSize: 13, marginTop: 4 },
+  sectionGap: { height: 8 },
+  section: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
+  sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: 12 },
+  fieldLabel: { fontSize: 12, fontWeight: '600', marginBottom: 6, marginTop: 8 },
   input: {
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    marginBottom: 16,
+    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13,
+    fontSize: 15, borderWidth: 1, marginBottom: 4,
   },
-  inputDisabled: {
-    opacity: 0.7,
+  saveBtn: {
+    borderRadius: 14, height: 50, alignItems: 'center',
+    justifyContent: 'center', marginTop: 16, marginBottom: 12,
   },
-  saveButton: {
-    borderRadius: 12,
-    height: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
+  saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  themeRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  themeChip: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 12, borderRadius: 12, borderWidth: 1.5,
   },
-  saveButtonDisabled: {
-    opacity: 0.7,
+  themeChipText: { fontSize: 13, fontWeight: '600' },
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 14, borderBottomWidth: 1,
   },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+  rowIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  rowContent: { flex: 1 },
+  rowTitle: { fontSize: 15, fontWeight: '600' },
+  rowSub: { fontSize: 12, marginTop: 2 },
+  logoutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 18, marginHorizontal: 16, borderRadius: 16,
   },
-  themeOptions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  themeOption: {
-    flex: 1,
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 2,
-  },
-  themeOptionText: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 8,
-  },
-  actionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  actionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionContent: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  actionTitle: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  actionSubtitle: {
-    fontSize: 14,
-    marginTop: 2,
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    marginTop: 8,
-  },
-  logoutText: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  version: {
-    textAlign: 'center',
-    fontSize: 12,
-    padding: 20,
-  },
+  logoutText: { fontSize: 16, fontWeight: '700' },
+  version: { textAlign: 'center', fontSize: 12, paddingVertical: 20 },
 });
