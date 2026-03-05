@@ -238,6 +238,10 @@ class ApiService {
     });
   }
 
+  async checkVersion() {
+    return this.request('/version');
+  }
+
   // Support chat
   async supportChat(messages: { role: string; content: string }[]) {
     return this.request('/support/chat', {

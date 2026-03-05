@@ -1952,6 +1952,19 @@ async def payment_page(slug: str, reference: str = '', trxref: str = ''):
 async def root():
     return {"message": "CartY API", "version": "1.0"}
 
+@api_router.get("/version")
+async def get_version():
+    """Returns app version config from app_config table."""
+    rows = many(await db(lambda: supabase.table('app_config').select('key,value').execute()))
+    config = {r['key']: r['value'] for r in rows}
+    return {
+        "current_version": config.get("current_version", "1.0.0"),
+        "min_version": config.get("min_version", "1.0.0"),
+        "android_download_url": config.get("android_download_url", ""),
+        "ios_download_url": config.get("ios_download_url", ""),
+        "release_notes": config.get("release_notes", ""),
+    }
+
 @api_router.get("/health")
 async def health():
     return {"status": "healthy"}
