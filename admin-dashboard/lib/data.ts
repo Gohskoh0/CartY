@@ -4,14 +4,20 @@ import { startOfMonth, subMonths, format } from 'date-fns';
 // ── Overview stats ──────────────────────────────────────────────────────────
 
 export async function getOverviewStats() {
-  const [usersRes, storesRes, ordersRes, activeSubsRes, adRes, withdrawRes] = await Promise.all([
+  const [usersRes, storesRes, ordersRes, activeSubsRes, withdrawRes] = await Promise.all([
     supabase.from('users').select('id', { count: 'exact', head: true }),
     supabase.from('stores').select('id', { count: 'exact', head: true }),
     supabase.from('orders').select('id, total_amount, status', { count: 'exact' }),
     supabase.from('stores').select('id', { count: 'exact', head: true }).eq('subscription_status', 'active'),
-    supabase.from('ad_campaigns').select('id', { count: 'exact', head: true }),
     supabase.from('withdrawals').select('amount').eq('status', 'success'),
   ]);
+
+  // ad_campaigns table may not exist yet — query separately and swallow errors
+  let totalAdCampaigns = 0;
+  try {
+    const adRes = await supabase.from('ad_campaigns').select('id', { count: 'exact', head: true });
+    totalAdCampaigns = adRes.count ?? 0;
+  } catch {}
 
   const orders = ordersRes.data ?? [];
   const gmv = orders.filter(o => o.status === 'paid').reduce((s, o) => s + (o.total_amount ?? 0), 0);
@@ -23,7 +29,7 @@ export async function getOverviewStats() {
     totalStores: storesRes.count ?? 0,
     totalOrders: ordersRes.count ?? 0,
     activeSubscriptions: activeSubsRes.count ?? 0,
-    totalAdCampaigns: adRes.count ?? 0,
+    totalAdCampaigns,
     gmv,
     subscriptionRevenue,
     totalWithdrawn,
@@ -123,7 +129,7 @@ export async function getAllStores() {
 export async function getAllOrders(page = 0, pageSize = 50, status = '') {
   let q = supabase
     .from('orders')
-    .select(`id, buyer_name, buyer_phone, total_amount, status, created_at, stores(name, slug)`, { count: 'exact' })
+    .select(`id, buyer_name, buyer_phone, total_amount, status, payment_reference, created_at, stores(name, slug)`, { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(page * pageSize, page * pageSize + pageSize - 1);
   if (status) q = q.eq('status', status);
@@ -191,20 +197,28 @@ export async function getSubscriptionData() {
 // ── Ad campaigns ─────────────────────────────────────────────────────────────
 
 export async function getAdCampaigns() {
-  const { data } = await supabase
-    .from('ad_campaigns')
-    .select('*, stores(name, slug)')
-    .order('created_at', { ascending: false });
-  return data ?? [];
+  try {
+    const { data } = await supabase
+      .from('ad_campaigns')
+      .select('*, stores(name, slug)')
+      .order('created_at', { ascending: false });
+    return data ?? [];
+  } catch {
+    return [];
+  }
 }
 
 // ── App config ───────────────────────────────────────────────────────────────
 
 export async function getAppConfig() {
-  const { data } = await supabase.from('app_config').select('key, value, updated_at');
-  const config: Record<string, string> = {};
-  for (const row of data ?? []) config[row.key] = row.value;
-  return config;
+  try {
+    const { data } = await supabase.from('app_config').select('key, value, updated_at');
+    const config: Record<string, string> = {};
+    for (const row of data ?? []) config[row.key] = row.value;
+    return config;
+  } catch {
+    return {};
+  }
 }
 
 // ── Activity feed ─────────────────────────────────────────────────────────────

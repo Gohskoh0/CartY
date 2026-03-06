@@ -1,18 +1,37 @@
+'use client';
+import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
-import DataTable, { StatusBadge } from '@/components/DataTable';
-import { getAllUsers, getUserGrowth } from '@/lib/data';
+import DataTable from '@/components/DataTable';
+import StatCard from '@/components/StatCard';
 import { UserGrowthChart } from '@/components/Charts';
 import { Users, ShieldCheck, Globe, Smartphone } from 'lucide-react';
 import { format } from 'date-fns';
-import StatCard from '@/components/StatCard';
 
-export const revalidate = 60;
+export default function UsersPage() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function UsersPage() {
-  const [{ data: users, count }, growth] = await Promise.all([
-    getAllUsers(0, 500),
-    getUserGrowth(),
-  ]);
+  useEffect(() => {
+    fetch('/api/data?page=users')
+      .then(r => r.json())
+      .then(d => { if (!d.error) setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading || !data) {
+    return (
+      <div className="min-h-full">
+        <Header title="Users" subtitle="Loading…" />
+        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="glass rounded-2xl h-24 animate-pulse border border-white/5" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const { users, count, growth } = data;
 
   const verified = users.filter((u: any) => u.is_phone_verified).length;
   const withPush = users.filter((u: any) => u.push_token).length;
@@ -72,10 +91,10 @@ export default async function UsersPage() {
       <div className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard title="Total Users" value={count} icon={Users} color="sky" delay={0} />
-          <StatCard title="Verified" value={verified} icon={ShieldCheck} color="emerald" delay={0.05} />
-          <StatCard title="Push Enabled" value={withPush} icon={Smartphone} color="indigo" delay={0.1} />
-          <StatCard title="Countries" value={countries} icon={Globe} color="violet" delay={0.15} />
+          <StatCard title="Total Users" value={count} icon={<Users className="w-5 h-5" />} color="sky" delay={0} />
+          <StatCard title="Verified" value={verified} icon={<ShieldCheck className="w-5 h-5" />} color="emerald" delay={0.05} />
+          <StatCard title="Push Enabled" value={withPush} icon={<Smartphone className="w-5 h-5" />} color="indigo" delay={0.1} />
+          <StatCard title="Countries" value={countries} icon={<Globe className="w-5 h-5" />} color="violet" delay={0.15} />
         </div>
 
         {/* Growth chart */}

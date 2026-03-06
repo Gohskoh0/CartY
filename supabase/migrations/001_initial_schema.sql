@@ -21,9 +21,13 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   phone TEXT NOT NULL,
   code TEXT NOT NULL,
   purpose TEXT NOT NULL,  -- 'verify_phone' | 'forgot_password'
+  used BOOLEAN DEFAULT FALSE NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now(),
   expires_at TIMESTAMPTZ DEFAULT (now() + INTERVAL '10 minutes')
 );
+
+-- If otp_codes already exists without the 'used' column, add it:
+ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS used BOOLEAN DEFAULT FALSE NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_otp_codes_phone ON otp_codes(phone);
 

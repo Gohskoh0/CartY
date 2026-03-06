@@ -5,7 +5,10 @@ import Header from '@/components/Header';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, Save, RefreshCw, CheckCircle, AlertCircle, Tag, Link, FileText, Shield, Smartphone } from 'lucide-react';
 
-const FIELDS = [
+interface FieldDef { key: string; label: string; placeholder: string; help: string; multiline?: boolean }
+interface FieldGroup { group: string; icon: React.ElementType; color: string; bg: string; fields: FieldDef[] }
+
+const FIELDS: FieldGroup[] = [
   {
     group: 'Version Control',
     icon: Tag,

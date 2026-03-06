@@ -1,22 +1,40 @@
+'use client';
+import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import DataTable, { StatusBadge } from '@/components/DataTable';
 import StatCard from '@/components/StatCard';
 import { OrdersBarChart } from '@/components/Charts';
-import { getAllOrders, getMonthlyTrend } from '@/lib/data';
-import { ShoppingBag, CheckCircle, Clock, XCircle, TrendingUp } from 'lucide-react';
+import { ShoppingBag, CheckCircle, Clock, TrendingUp } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 
-export const revalidate = 60;
+export default function OrdersPage() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function OrdersPage() {
-  const [{ data: orders, count }, trend] = await Promise.all([
-    getAllOrders(0, 500),
-    getMonthlyTrend(),
-  ]);
+  useEffect(() => {
+    fetch('/api/data?page=orders')
+      .then(r => r.json())
+      .then(d => { if (!d.error) setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading || !data) {
+    return (
+      <div className="min-h-full">
+        <Header title="Orders" subtitle="Loading…" />
+        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="glass rounded-2xl h-24 animate-pulse border border-white/5" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const { orders, count, trend } = data;
 
   const paid      = orders.filter((o: any) => o.status === 'paid').length;
   const pending   = orders.filter((o: any) => o.status === 'pending').length;
-  const cancelled = orders.filter((o: any) => o.status === 'cancelled').length;
   const gmv       = orders.filter((o: any) => o.status === 'paid').reduce((s: number, o: any) => s + (o.total_amount ?? 0), 0);
 
   const columns = [
@@ -40,8 +58,8 @@ export default async function OrdersPage() {
       label: 'Store',
       render: (o: any) => (
         <div>
-          <p className="text-slate-300 text-sm">{(o as any).stores?.name || '—'}</p>
-          <p className="text-xs text-slate-600">/{(o as any).stores?.slug}</p>
+          <p className="text-slate-300 text-sm">{o.stores?.name || '—'}</p>
+          <p className="text-xs text-slate-600">/{o.stores?.slug}</p>
         </div>
       ),
     },
@@ -82,10 +100,10 @@ export default async function OrdersPage() {
       <div className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard title="Total Orders" value={count}                             icon={ShoppingBag}  color="emerald" delay={0}    />
-          <StatCard title="Paid"         value={paid}                              icon={CheckCircle}  color="emerald" delay={0.05} />
-          <StatCard title="Pending"      value={pending}                           icon={Clock}        color="amber"   delay={0.1}  />
-          <StatCard title="GMV (Paid)"   value={`₦${gmv.toLocaleString()}`}        icon={TrendingUp}   color="indigo"  delay={0.15} />
+          <StatCard title="Total Orders" value={count}                      icon={<ShoppingBag className="w-5 h-5" />}  color="emerald" delay={0}    />
+          <StatCard title="Paid"         value={paid}                       icon={<CheckCircle className="w-5 h-5" />}  color="emerald" delay={0.05} />
+          <StatCard title="Pending"      value={pending}                    icon={<Clock className="w-5 h-5" />}        color="amber"   delay={0.1}  />
+          <StatCard title="GMV (Paid)"   value={`₦${gmv.toLocaleString()}`} icon={<TrendingUp className="w-5 h-5" />}  color="indigo"  delay={0.15} />
         </div>
 
         {/* Chart */}

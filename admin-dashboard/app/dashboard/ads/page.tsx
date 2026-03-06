@@ -1,21 +1,43 @@
+'use client';
+import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import StatCard from '@/components/StatCard';
 import DataTable, { StatusBadge } from '@/components/DataTable';
 import { DonutChart } from '@/components/Charts';
-import { getAdCampaigns } from '@/lib/data';
-import { Megaphone, Play, CheckCircle, AlertCircle, Clock } from 'lucide-react';
-import { format, formatDistanceToNow } from 'date-fns';
+import { Megaphone, Play, AlertCircle, Clock } from 'lucide-react';
+import { format } from 'date-fns';
 
-export const revalidate = 60;
+export default function AdsPage() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function AdsPage() {
-  const campaigns = await getAdCampaigns();
+  useEffect(() => {
+    fetch('/api/data?page=ads')
+      .then(r => r.json())
+      .then(d => { if (!d.error) setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
 
-  const active = campaigns.filter((c: any) => c.status === 'active').length;
+  if (loading || !data) {
+    return (
+      <div className="min-h-full">
+        <Header title="Ad Campaigns" subtitle="Loading…" />
+        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="glass rounded-2xl h-24 animate-pulse border border-white/5" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const { campaigns } = data;
+
+  const active    = campaigns.filter((c: any) => c.status === 'active').length;
   const launching = campaigns.filter((c: any) => c.status === 'launching').length;
-  const failed = campaigns.filter((c: any) => c.status === 'failed').length;
-  const meta = campaigns.filter((c: any) => c.platform === 'meta').length;
-  const tiktok = campaigns.filter((c: any) => c.platform === 'tiktok').length;
+  const failed    = campaigns.filter((c: any) => c.status === 'failed').length;
+  const meta      = campaigns.filter((c: any) => c.platform === 'meta').length;
+  const tiktok    = campaigns.filter((c: any) => c.platform === 'tiktok').length;
   const totalBudget = campaigns.reduce((s: number, c: any) => s + (c.budget_ngn ?? 0), 0);
 
   const platformDist = [
@@ -95,10 +117,10 @@ export default async function AdsPage() {
       <div className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard title="Total Campaigns" value={campaigns.length} icon={Megaphone} color="indigo" delay={0} />
-          <StatCard title="Active" value={active} icon={Play} color="emerald" delay={0.05} />
-          <StatCard title="Launching" value={launching} icon={Clock} color="amber" delay={0.1} />
-          <StatCard title="Failed" value={failed} icon={AlertCircle} color="rose" delay={0.15} />
+          <StatCard title="Total Campaigns" value={campaigns.length} icon={<Megaphone className="w-5 h-5" />} color="indigo"  delay={0}    />
+          <StatCard title="Active"          value={active}           icon={<Play className="w-5 h-5" />}      color="emerald" delay={0.05} />
+          <StatCard title="Launching"       value={launching}        icon={<Clock className="w-5 h-5" />}     color="amber"   delay={0.1}  />
+          <StatCard title="Failed"          value={failed}           icon={<AlertCircle className="w-5 h-5" />} color="rose"  delay={0.15} />
         </div>
 
         {/* Charts + budget */}
@@ -123,11 +145,11 @@ export default async function AdsPage() {
             <h3 className="font-semibold text-slate-200">Budget Summary</h3>
             <div className="space-y-3">
               {[
-                { label: 'Total Budget', value: `₦${totalBudget.toLocaleString()}`, color: 'text-indigo-400' },
-                { label: 'Meta Campaigns', value: meta.toString(), color: 'text-sky-400' },
-                { label: 'TikTok Campaigns', value: tiktok.toString(), color: 'text-rose-400' },
-                { label: 'Active Now', value: active.toString(), color: 'text-emerald-400' },
-                { label: 'Need Attention', value: (failed + launching).toString(), color: 'text-amber-400' },
+                { label: 'Total Budget',       value: `₦${totalBudget.toLocaleString()}`, color: 'text-indigo-400' },
+                { label: 'Meta Campaigns',     value: meta.toString(),                    color: 'text-sky-400' },
+                { label: 'TikTok Campaigns',   value: tiktok.toString(),                  color: 'text-rose-400' },
+                { label: 'Active Now',         value: active.toString(),                  color: 'text-emerald-400' },
+                { label: 'Need Attention',     value: (failed + launching).toString(),    color: 'text-amber-400' },
               ].map(({ label, value, color }) => (
                 <div key={label} className="flex justify-between py-2 border-b border-white/5 last:border-0">
                   <span className="text-sm text-slate-400">{label}</span>

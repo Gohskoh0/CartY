@@ -1,20 +1,44 @@
+'use client';
+import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import StatCard from '@/components/StatCard';
 import DataTable, { StatusBadge } from '@/components/DataTable';
 import { DonutChart } from '@/components/Charts';
-import { getSubscriptionData } from '@/lib/data';
 import { CreditCard, CheckCircle, XCircle, AlertTriangle, TrendingUp } from 'lucide-react';
 import { format, formatDistanceToNow, isPast } from 'date-fns';
 
-export const revalidate = 60;
+export default function SubscriptionsPage() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function SubscriptionsPage() {
-  const { all, active, inactive, expiringSoon } = await getSubscriptionData();
+  useEffect(() => {
+    fetch('/api/data?page=subscriptions')
+      .then(r => r.json())
+      .then(d => { if (!d.error) setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading || !data) {
+    return (
+      <div className="min-h-full">
+        <Header title="Subscriptions" subtitle="Loading…" />
+        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="glass rounded-2xl h-24 animate-pulse border border-white/5" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const { all, active, inactive, expiringSoon } = data;
 
   const donutData = [
     { name: 'Active', value: active.length },
     { name: 'Inactive', value: inactive.length },
   ];
+
+  const mrr = active.length * 7500;
 
   const columns = [
     {
@@ -72,18 +96,16 @@ export default async function SubscriptionsPage() {
     },
   ];
 
-  const mrr = active.length * 7500;
-
   return (
     <div className="min-h-full">
       <Header title="Subscriptions" subtitle="Monitor store subscription health and revenue" />
       <div className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard title="Active Subs" value={active.length} icon={CheckCircle} color="emerald" delay={0} />
-          <StatCard title="Inactive" value={inactive.length} icon={XCircle} color="rose" delay={0.05} />
-          <StatCard title="Expiring Soon" value={expiringSoon.length} icon={AlertTriangle} color="amber" delay={0.1} />
-          <StatCard title="Est. MRR" value={`₦${mrr.toLocaleString()}`} icon={TrendingUp} color="indigo" delay={0.15} />
+          <StatCard title="Active Subs"    value={active.length}        icon={<CheckCircle className="w-5 h-5" />}    color="emerald" delay={0}    />
+          <StatCard title="Inactive"       value={inactive.length}      icon={<XCircle className="w-5 h-5" />}        color="rose"    delay={0.05} />
+          <StatCard title="Expiring Soon"  value={expiringSoon.length}  icon={<AlertTriangle className="w-5 h-5" />}  color="amber"   delay={0.1}  />
+          <StatCard title="Est. MRR"       value={`₦${mrr.toLocaleString()}`} icon={<TrendingUp className="w-5 h-5" />} color="indigo" delay={0.15} />
         </div>
 
         {/* Visual breakdown */}

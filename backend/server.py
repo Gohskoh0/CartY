@@ -349,46 +349,73 @@ async def verify_otp_code(phone: str, code: str, purpose: str) -> bool:
     return True
 
 async def send_sms_otp(phone: str, code: str, purpose: str) -> bool:
-    """Send OTP via SMS. Returns True on success, False on failure."""
+    """Send OTP via SMS using Termii. Returns True on success, False on failure."""
     if purpose == 'verify_phone':
         message = f"Your CartY verification code is {code}. Valid for 10 minutes. Do not share."
     else:
         message = f"Your CartY password reset code is {code}. Valid for 10 minutes. Do not share."
 
-    # Always log to Railway console so devs can see the OTP even if SMS fails
-    logger.info(f"[SMS OTP] Phone={phone} Code={code} Purpose={purpose}")
+    # Always log OTP to Railway so devs can use it even if SMS delivery fails
+    logger.info(f"[OTP] Phone={phone} | Code={code} | Purpose={purpose}")
 
     if not TERMII_API_KEY:
-        logger.warning("[SMS] TERMII_API_KEY is not set — SMS not sent. Set it in Railway env vars.")
+        logger.error("[SMS] TERMII_API_KEY not set — add it to Railway environment variables.")
         return False
 
+    # Normalise to international format (Nigeria: 0XXXXXXXXXX → 234XXXXXXXXXX)
     clean = re.sub(r'[^0-9]', '', phone)
     if clean.startswith('0'):
         clean = '234' + clean[1:]
     elif not clean.startswith('234') and len(clean) <= 10:
         clean = '234' + clean
+    elif not clean.startswith('234') and len(clean) == 11 and clean.startswith('0'):
+        clean = '234' + clean[1:]
 
-    # Try DND channel first (bypasses Do Not Disturb in Nigeria), then fall back to generic
-    for channel in ['dnd', 'generic']:
+    logger.info(f"[SMS] Attempting delivery to normalised number: {clean}")
+
+    # (channel, sender_id) pairs to try in order:
+    # - dnd + N-Alert: bypasses DND lists (requires DND route on Termii account)
+    # - generic + N-Alert: standard Nigeria SMS with Termii's shared sender
+    # - generic + CartY: fallback in case N-Alert is restricted on generic
+    attempts = [
+        ('dnd', 'N-Alert'),
+        ('generic', 'N-Alert'),
+        ('generic', 'CartY'),
+    ]
+
+    for channel, sender in attempts:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post("https://api.ng.termii.com/api/sms/send", json={
-                    "api_key": TERMII_API_KEY,
-                    "to": clean,
-                    "from": "N-Alert",
-                    "sms": message,
-                    "type": "plain",
-                    "channel": channel,
-                })
-                result = resp.json()
-                if resp.status_code == 200 and result.get("code") == "ok":
-                    logger.info(f"[SMS] OTP sent via {channel} channel to {clean}")
-                    return True
-                logger.warning(f"[SMS] {channel} channel failed (status={resp.status_code}): {resp.text}")
-        except Exception as e:
-            logger.error(f"[SMS] Error sending via {channel} channel: {e}")
+            payload = {
+                "api_key": TERMII_API_KEY,
+                "to": clean,
+                "from": sender,
+                "sms": message,
+                "type": "plain",
+                "channel": channel,
+            }
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post("https://api.ng.termii.com/api/sms/send", json=payload)
 
-    logger.error(f"[SMS] All channels failed for {clean}")
+            try:
+                result = resp.json()
+            except Exception:
+                result = {}
+
+            logger.info(f"[SMS] Termii response ({channel}/{sender}): status={resp.status_code} body={result}")
+
+            if resp.status_code == 200 and result.get("code") == "ok":
+                logger.info(f"[SMS] OTP delivered via {channel}/{sender} to {clean}")
+                return True
+
+            # Log the specific Termii error code and message for easy debugging
+            err_code = result.get("code", "unknown")
+            err_msg  = result.get("message", resp.text)
+            logger.warning(f"[SMS] {channel}/{sender} failed — Termii code={err_code}: {err_msg}")
+
+        except Exception as e:
+            logger.error(f"[SMS] Exception calling Termii ({channel}/{sender}): {e}")
+
+    logger.error(f"[SMS] All delivery attempts failed for {clean}. Check Railway logs for Termii error details.")
     return False
 
 
@@ -626,12 +653,17 @@ async def register(data: UserRegister):
         "password_hash": hash_password(data.password),
         "country": data.country.upper(),
         "state": data.state,
-        "phone_verified": False,
+        "is_phone_verified": False,
     }).execute())
     user = result.data[0]
-    code = generate_otp()
-    await store_otp(data.phone, code, 'verify_phone')
-    sms_sent = await send_sms_otp(data.phone, code, 'verify_phone')
+    # Send OTP but never let failures block account creation
+    sms_sent = False
+    try:
+        code = generate_otp()
+        await store_otp(data.phone, code, 'verify_phone')
+        sms_sent = await send_sms_otp(data.phone, code, 'verify_phone')
+    except Exception as otp_err:
+        logger.error(f"[register] OTP step failed for {data.phone}: {otp_err}")
     return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone'], "sms_sent": sms_sent}
 
 @api_router.post("/auth/login")
@@ -652,7 +684,7 @@ async def get_me(user=Depends(get_current_user)):
         "has_store": store is not None,
         "store_id": store['id'] if store else None,
         "store_slug": store['slug'] if store else None,
-        "phone_verified": user.get('phone_verified', False),
+        "phone_verified": user.get('is_phone_verified', False),
     }
 
 
@@ -677,7 +709,7 @@ async def verify_phone_endpoint(req: VerifyPhoneRequest, current_user=Depends(ge
     valid = await verify_otp_code(current_user['phone'], req.code, 'verify_phone')
     if not valid:
         raise HTTPException(status_code=400, detail="Invalid or expired code")
-    await db(lambda: supabase.table('users').update({'phone_verified': True}).eq('id', current_user['id']).execute())
+    await db(lambda: supabase.table('users').update({'is_phone_verified': True}).eq('id', current_user['id']).execute())
     return {"message": "Phone verified successfully"}
 
 @api_router.post("/auth/reset-password")
@@ -705,15 +737,41 @@ async def register_push_token(data: PushTokenRequest, user=Depends(get_current_u
 @api_router.post("/support/chat")
 async def support_chat(data: SupportChatRequest, user=Depends(get_current_user)):
     store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
-    context_parts = [f"- Phone: {user.get('phone', 'N/A')}", f"- Country: {user.get('country', 'NG')}"]
+
+    context_parts = [
+        f"- Phone: {user.get('phone', 'N/A')}",
+        f"- Country: {user.get('country', 'NG')}",
+        f"- Phone verified: {'Yes' if user.get('is_phone_verified') else 'No'}",
+    ]
+
     if store:
+        # Fetch order count and product count for richer context
+        orders_res = await db(lambda: supabase.table('orders').select('id', count='exact').eq('store_id', store['id']).execute())
+        paid_orders_res = await db(lambda: supabase.table('orders').select('id', count='exact').eq('store_id', store['id']).eq('status', 'paid').execute())
+        products_res = await db(lambda: supabase.table('products').select('id', count='exact').eq('store_id', store['id']).execute())
+        active_products_res = await db(lambda: supabase.table('products').select('id', count='exact').eq('store_id', store['id']).eq('is_active', True).execute())
+
+        sub_status = store.get('subscription_status', 'inactive')
+        sub_expires = store.get('subscription_expires_at', 'N/A')
+        bank_linked = bool(store.get('bank_recipient_code') or store.get('bank_account_number'))
+
         context_parts += [
             f"- Store name: {store.get('name', 'N/A')}",
-            f"- Subscription: {store.get('subscription_status', 'inactive')}",
-            f"- Subscription expires: {store.get('subscription_end_date', 'N/A')}",
+            f"- Store slug: {store.get('slug', 'N/A')} (storefront URL: carty.app/{store.get('slug', '')})",
+            f"- Subscription status: {sub_status}",
+            f"- Subscription expires: {sub_expires}",
             f"- Wallet balance: ₦{store.get('wallet_balance', 0):,.2f}",
-            f"- Bank linked: {'Yes' if store.get('recipient_code') else 'No'}",
+            f"- Pending balance (not yet withdrawable): ₦{store.get('pending_balance', 0):,.2f}",
+            f"- Total lifetime earnings: ₦{store.get('total_earnings', 0):,.2f}",
+            f"- Bank account linked: {'Yes' if bank_linked else 'No'}",
+            f"- Bank name: {store.get('bank_name', 'Not linked')}",
+            f"- Total orders: {orders_res.count or 0} ({paid_orders_res.count or 0} paid)",
+            f"- Total products: {products_res.count or 0} ({active_products_res.count or 0} active)",
+            f"- WhatsApp number: {store.get('whatsapp_number', 'Not set')}",
         ]
+    else:
+        context_parts.append("- Store: Not created yet")
+
     messages = [{"role": m.role, "content": m.content} for m in data.messages]
     reply = await openai_chat(messages, "\n".join(context_parts))
     return {"message": reply}

@@ -1,15 +1,37 @@
+'use client';
+import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import DataTable, { StatusBadge } from '@/components/DataTable';
 import StatCard from '@/components/StatCard';
 import { DonutChart } from '@/components/Charts';
-import { getAllStores } from '@/lib/data';
-import { Store, CreditCard, Wallet, Link, CircleDot } from 'lucide-react';
+import { Store, CreditCard, Wallet, Link } from 'lucide-react';
 import { format } from 'date-fns';
 
-export const revalidate = 60;
+export default function StoresPage() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function StoresPage() {
-  const stores = await getAllStores();
+  useEffect(() => {
+    fetch('/api/data?page=stores')
+      .then(r => r.json())
+      .then(d => { if (!d.error) setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading || !data) {
+    return (
+      <div className="min-h-full">
+        <Header title="Stores" subtitle="Loading…" />
+        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="glass rounded-2xl h-24 animate-pulse border border-white/5" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const { stores } = data;
 
   const active = stores.filter((s: any) => s.subscription_status === 'active').length;
   const withMeta = stores.filter((s: any) => s.meta_ad_account_id).length;
@@ -95,10 +117,10 @@ export default async function StoresPage() {
       <div className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard title="Total Stores" value={stores.length} icon={Store} color="violet" delay={0} />
-          <StatCard title="Active Subs" value={active} icon={CreditCard} color="emerald" delay={0.05} />
-          <StatCard title="Total Wallet" value={`₦${totalWallet.toLocaleString()}`} icon={Wallet} color="amber" delay={0.1} />
-          <StatCard title="Ad Accounts" value={withMeta + withTikTok} icon={Link} color="sky" delay={0.15} />
+          <StatCard title="Total Stores" value={stores.length} icon={<Store className="w-5 h-5" />} color="violet" delay={0} />
+          <StatCard title="Active Subs" value={active} icon={<CreditCard className="w-5 h-5" />} color="emerald" delay={0.05} />
+          <StatCard title="Total Wallet" value={`₦${totalWallet.toLocaleString()}`} icon={<Wallet className="w-5 h-5" />} color="amber" delay={0.1} />
+          <StatCard title="Ad Accounts" value={withMeta + withTikTok} icon={<Link className="w-5 h-5" />} color="sky" delay={0.15} />
         </div>
 
         {/* Sub distribution */}

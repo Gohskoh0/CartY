@@ -4,7 +4,7 @@ import { jwtVerify } from 'jose';
 const PUBLIC_PATHS = ['/', '/api/auth/login'];
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? 'fallback-secret-32-chars-minimum!!');
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (PUBLIC_PATHS.some((p) => pathname === p)) return NextResponse.next();
 

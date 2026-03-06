@@ -1,18 +1,36 @@
+'use client';
+import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import StatCard from '@/components/StatCard';
 import { RevenueAreaChart, DualBarChart } from '@/components/Charts';
-import { getRevenueData, getMonthlyTrend } from '@/lib/data';
 import { TrendingUp, Wallet, ArrowDownCircle, Store, BadgeDollarSign } from 'lucide-react';
 
-export const revalidate = 60;
+export default function RevenuePage() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function RevenuePage() {
-  const [revenue, trend] = await Promise.all([
-    getRevenueData(),
-    getMonthlyTrend(),
-  ]);
+  useEffect(() => {
+    fetch('/api/data?page=revenue')
+      .then(r => r.json())
+      .then(d => { if (!d.error) setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
 
-  const activeSubCount = revenue.topStores.length; // proxy from top-stores query
+  if (loading || !data) {
+    return (
+      <div className="min-h-full">
+        <Header title="Revenue" subtitle="Loading…" />
+        <div className="p-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="glass rounded-2xl h-24 animate-pulse border border-white/5" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const { revenue, trend } = data;
+  const activeSubCount = revenue.topStores.length;
   const subRevenue = activeSubCount * 7500;
 
   return (
@@ -21,11 +39,11 @@ export default async function RevenuePage() {
       <div className="p-6 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
-          <StatCard title="Total GMV"        value={`₦${revenue.gmv.toLocaleString()}`}              icon={TrendingUp}       color="indigo" delay={0}    />
-          <StatCard title="Sub Revenue (Est)" value={`₦${subRevenue.toLocaleString()}`}              icon={BadgeDollarSign}  color="emerald" delay={0.05} />
-          <StatCard title="Total Withdrawn"  value={`₦${revenue.totalWithdrawn.toLocaleString()}`}   icon={ArrowDownCircle}  color="rose"    delay={0.1}  />
-          <StatCard title="Pending Payouts"  value={`₦${revenue.pendingWithdrawals.toLocaleString()}`} icon={Wallet}          color="amber"   delay={0.15} />
-          <StatCard title="Top Stores"       value={revenue.topStores.length}                        icon={Store}            color="violet"  delay={0.2}  />
+          <StatCard title="Total GMV"        value={`₦${revenue.gmv.toLocaleString()}`}                   icon={<TrendingUp className="w-5 h-5" />}       color="indigo"  delay={0}    />
+          <StatCard title="Sub Revenue (Est)" value={`₦${subRevenue.toLocaleString()}`}                   icon={<BadgeDollarSign className="w-5 h-5" />}  color="emerald" delay={0.05} />
+          <StatCard title="Total Withdrawn"  value={`₦${revenue.totalWithdrawn.toLocaleString()}`}        icon={<ArrowDownCircle className="w-5 h-5" />}  color="rose"    delay={0.1}  />
+          <StatCard title="Pending Payouts"  value={`₦${revenue.pendingWithdrawals.toLocaleString()}`}    icon={<Wallet className="w-5 h-5" />}           color="amber"   delay={0.15} />
+          <StatCard title="Top Stores"       value={revenue.topStores.length}                             icon={<Store className="w-5 h-5" />}            color="violet"  delay={0.2}  />
         </div>
 
         {/* Charts */}
@@ -61,11 +79,9 @@ export default async function RevenuePage() {
                 ];
                 return (
                   <div key={i} className="flex items-center gap-4">
-                    {/* Rank */}
                     <div className="w-7 h-7 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 text-xs font-bold shrink-0">
                       {i + 1}
                     </div>
-                    {/* Store name + bar */}
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between mb-1.5">
                         <span className="text-sm text-slate-300 font-medium truncate">{store.name}</span>
@@ -80,7 +96,6 @@ export default async function RevenuePage() {
                         />
                       </div>
                     </div>
-                    {/* Wallet */}
                     <div className="text-right shrink-0 min-w-[80px]">
                       <p className="text-xs text-slate-500">Wallet</p>
                       <p className="text-xs font-semibold text-amber-400">₦{(store.wallet_balance ?? 0).toLocaleString()}</p>
