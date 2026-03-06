@@ -27,10 +27,13 @@ from supabase import create_client, Client
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-SUPABASE_URL = os.environ['SUPABASE_URL']
-SUPABASE_SERVICE_KEY = os.environ['SUPABASE_SERVICE_KEY']
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+# ── Logging first so startup errors are visible in Railway logs ──
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.info("CartY API starting up...")
 
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
 PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '')
 PAYSTACK_PUBLIC_KEY = os.environ.get('PAYSTACK_PUBLIC_KEY', '')
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
@@ -45,20 +48,22 @@ TIKTOK_ACCESS_TOKEN = os.environ.get('TIKTOK_ACCESS_TOKEN', '')
 TIKTOK_ADVERTISER_ID = os.environ.get('TIKTOK_ADVERTISER_ID', '')
 ADS_MARGIN_PERCENT = float(os.environ.get('ADS_MARGIN_PERCENT', '15'))
 
+logger.info(f"SUPABASE_URL set: {bool(SUPABASE_URL)}")
+logger.info(f"SUPABASE_SERVICE_KEY set: {bool(SUPABASE_SERVICE_KEY)}")
+logger.info(f"JWT_SECRET custom: {JWT_SECRET != 'default_secret'}")
+logger.info(f"PAYSTACK_SECRET_KEY set: {bool(PAYSTACK_SECRET_KEY)}")
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    logger.critical("CRITICAL: SUPABASE_URL and/or SUPABASE_SERVICE_KEY not set — check Railway Variables tab!")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 resend.api_key = RESEND_API_KEY
 
 app = FastAPI(title="CartY API", description="WhatsApp Storefront Builder API")
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-logger.info("CartY API starting up...")
-logger.info(f"SUPABASE_URL set: {bool(os.environ.get('SUPABASE_URL'))}")
-logger.info(f"SUPABASE_SERVICE_KEY set: {bool(os.environ.get('SUPABASE_SERVICE_KEY'))}")
-logger.info(f"JWT_SECRET set: {JWT_SECRET != 'default_secret'}")
-logger.info(f"PAYSTACK_SECRET_KEY set: {bool(PAYSTACK_SECRET_KEY)}")
+logger.info("FastAPI app created successfully")
 
 
 @app.get("/health")
