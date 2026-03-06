@@ -54,6 +54,17 @@ security = HTTPBearer(auto_error=False)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+logger.info("CartY API starting up...")
+logger.info(f"SUPABASE_URL set: {bool(os.environ.get('SUPABASE_URL'))}")
+logger.info(f"SUPABASE_SERVICE_KEY set: {bool(os.environ.get('SUPABASE_SERVICE_KEY'))}")
+logger.info(f"JWT_SECRET set: {JWT_SECRET != 'default_secret'}")
+logger.info(f"PAYSTACK_SECRET_KEY set: {bool(PAYSTACK_SECRET_KEY)}")
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "CartY API"}
+
 
 # ================== DB HELPERS ==================
 
