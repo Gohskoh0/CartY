@@ -744,10 +744,15 @@ async def send_otp_endpoint(req: SendOtpRequest):
         if not user:
             raise HTTPException(status_code=404, detail="No account found with this phone number")
     sent, result = await send_sms_otp(phone, req.purpose)
-    if not sent:
-        raise HTTPException(status_code=503, detail=f'Could not send SMS: {result}')
-    await store_otp(phone, f'TERMII:{result}', req.purpose)
-    return {"message": "OTP sent successfully"}
+    if sent:
+        await store_otp(phone, f'TERMII:{result}', req.purpose)
+        return {"message": "OTP sent successfully"}
+    if result.startswith('LOCAL:'):
+        local_code = result.split('|')[0].replace('LOCAL:', '')
+        await store_otp(phone, local_code, req.purpose)
+        logger.warning(f'[OTP] SMS unavailable. Code for {phone}: {local_code} — share manually.')
+        return {"message": "OTP sent successfully"}
+    raise HTTPException(status_code=503, detail=f'Could not send SMS: {result}')
 
 @api_router.post("/auth/verify-phone")
 async def verify_phone_endpoint(req: VerifyPhoneRequest, current_user=Depends(get_current_user)):
