@@ -68,7 +68,16 @@ logger.info("FastAPI app created successfully")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "CartY API"}
+    return {"status": "ok", "service": "CartY API", "supabase_url_set": bool(SUPABASE_URL)}
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    tb = traceback.format_exc()
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}:\n{tb}")
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=500, content={"detail": str(exc), "error_type": type(exc).__name__})
 
 
 # ================== DB HELPERS ==================
