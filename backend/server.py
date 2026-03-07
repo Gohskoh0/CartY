@@ -47,6 +47,8 @@ META_AD_ACCOUNT_ID = os.environ.get('META_AD_ACCOUNT_ID', '')
 TIKTOK_ACCESS_TOKEN = os.environ.get('TIKTOK_ACCESS_TOKEN', '')
 TIKTOK_ADVERTISER_ID = os.environ.get('TIKTOK_ADVERTISER_ID', '')
 ADS_MARGIN_PERCENT = float(os.environ.get('ADS_MARGIN_PERCENT', '15'))
+TERMII_SENDER_ID = os.environ.get('TERMII_SENDER_ID', 'CartY')
+SKIP_PHONE_VERIFICATION = os.environ.get('SKIP_PHONE_VERIFICATION', '').lower() in ('1', 'true', 'yes')
 
 logger.info(f"SUPABASE_URL set: {bool(SUPABASE_URL)}")
 logger.info(f"SUPABASE_SERVICE_KEY set: {bool(SUPABASE_SERVICE_KEY)}")
@@ -451,7 +453,10 @@ async def send_sms_otp(phone: str, purpose: str):
             last_error = str(e)
             logger.error(f'[SMS] Exception {channel}: {e}')
 
-    return False, last_error
+    # All Termii attempts failed — log local code to Railway so admin can share it
+    local_code = generate_otp()
+    logger.warning(f'[OTP-FALLBACK] Termii unavailable. Code for {clean}: {local_code}')
+    return False, 'LOCAL:' + local_code + '|' + last_error
 
 
 
@@ -694,12 +699,15 @@ async def register(data: UserRegister):
     # Send OTP but never let failures block account creation
     sms_sent = False
     try:
-        sent, pin_id = await send_sms_otp(data.phone, 'verify_phone')
+        sent, pin_or_err = await send_sms_otp(data.phone, 'verify_phone')
         if sent:
-            await store_otp(data.phone, f'TERMII:{pin_id}', 'verify_phone')
+            await store_otp(data.phone, f'TERMII:{pin_or_err}', 'verify_phone')
             sms_sent = True
+        elif pin_or_err.startswith('LOCAL:'):
+            local_code = pin_or_err.split('|')[0].replace('LOCAL:', '')
+            await store_otp(data.phone, local_code, 'verify_phone')
         else:
-            logger.error(f'[register] OTP not sent: {pin_id}')
+            logger.error(f'[register] OTP not sent: {pin_or_err}')
     except Exception as otp_err:
         logger.error(f'[register] OTP step failed: {otp_err}')
     return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone'], "sms_sent": sms_sent}
@@ -743,6 +751,9 @@ async def send_otp_endpoint(req: SendOtpRequest):
 
 @api_router.post("/auth/verify-phone")
 async def verify_phone_endpoint(req: VerifyPhoneRequest, current_user=Depends(get_current_user)):
+    if SKIP_PHONE_VERIFICATION:
+        await db(lambda: supabase.table('users').update({'is_phone_verified': True}).eq('id', current_user['id']).execute())
+        return {"message": "Phone verified successfully"}
     valid = await verify_otp_code(current_user['phone'], req.code, 'verify_phone')
     if not valid:
         raise HTTPException(status_code=400, detail="Invalid or expired code")
