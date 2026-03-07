@@ -373,39 +373,32 @@ async def verify_otp_code(phone: str, code: str, purpose: str) -> bool:
     await db(lambda: supabase.table('otp_codes').update({'used': True}).eq('id', otp['id']).execute())
     return True
 
-async def send_sms_otp(phone: str, code: str, purpose: str) -> bool:
-    """Send OTP via SMS using Termii. Returns True on success, False on failure."""
+async def send_sms_otp(phone: str, code: str, purpose: str):
+    """Send OTP via Termii. Returns (True, '') on success or (False, error_msg) on failure."""
     if purpose == 'verify_phone':
         message = f"Your CartY verification code is {code}. Valid for 10 minutes. Do not share."
     else:
         message = f"Your CartY password reset code is {code}. Valid for 10 minutes. Do not share."
 
-    # Always log OTP to Railway so devs can use it even if SMS delivery fails
-    logger.info(f"[OTP] Phone={phone} | Code={code} | Purpose={purpose}")
+    logger.info(f"[OTP] Phone={phone} Code={code} Purpose={purpose}")
 
     if not TERMII_API_KEY:
-        logger.error("[SMS] TERMII_API_KEY not set — add it to Railway environment variables.")
-        return False
+        logger.error("[SMS] TERMII_API_KEY not set in Railway environment variables")
+        return False, "SMS service not configured"
 
     # Normalise to international format (Nigeria: 0XXXXXXXXXX → 234XXXXXXXXXX)
     clean = re.sub(r'[^0-9]', '', phone)
     if clean.startswith('0'):
         clean = '234' + clean[1:]
-    elif not clean.startswith('234') and len(clean) <= 10:
+    elif not clean.startswith('234'):
         clean = '234' + clean
-    elif not clean.startswith('234') and len(clean) == 11 and clean.startswith('0'):
-        clean = '234' + clean[1:]
+    logger.info(f"[SMS] Sending to: {clean}")
 
-    logger.info(f"[SMS] Attempting delivery to normalised number: {clean}")
-
-    # (channel, sender_id) pairs to try in order:
-    # - dnd + N-Alert: bypasses DND lists (requires DND route on Termii account)
-    # - generic + N-Alert: standard Nigeria SMS with Termii's shared sender
-    # - generic + CartY: fallback in case N-Alert is restricted on generic
+    last_error = "No attempts made"
     attempts = [
-        ('dnd', 'N-Alert'),
+        ('dnd',     'N-Alert'),
         ('generic', 'N-Alert'),
-        ('generic', 'CartY'),
+        ('generic', 'Termii'),
     ]
 
     for channel, sender in attempts:
@@ -420,28 +413,28 @@ async def send_sms_otp(phone: str, code: str, purpose: str) -> bool:
             }
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post("https://api.ng.termii.com/api/sms/send", json=payload)
-
             try:
                 result = resp.json()
             except Exception:
                 result = {}
 
-            logger.info(f"[SMS] Termii response ({channel}/{sender}): status={resp.status_code} body={result}")
+            logger.info(f"[SMS] Termii {channel}/{sender}: HTTP {resp.status_code} → {result}")
 
             if resp.status_code == 200 and result.get("code") == "ok":
-                logger.info(f"[SMS] OTP delivered via {channel}/{sender} to {clean}")
-                return True
+                logger.info(f"[SMS] Delivered via {channel}/{sender}")
+                return True, ""
 
-            # Log the specific Termii error code and message for easy debugging
-            err_code = result.get("code", "unknown")
-            err_msg  = result.get("message", resp.text)
-            logger.warning(f"[SMS] {channel}/{sender} failed — Termii code={err_code}: {err_msg}")
+            err_code = result.get("code", resp.status_code)
+            err_msg  = result.get("message", resp.text[:300])
+            last_error = f"{channel}/{sender}: [{err_code}] {err_msg}"
+            logger.warning(f"[SMS] Failed — {last_error}")
 
         except Exception as e:
-            logger.error(f"[SMS] Exception calling Termii ({channel}/{sender}): {e}")
+            last_error = str(e)
+            logger.error(f"[SMS] Exception {channel}/{sender}: {e}")
 
-    logger.error(f"[SMS] All delivery attempts failed for {clean}. Check Railway logs for Termii error details.")
-    return False
+    logger.error(f"[SMS] All attempts failed. Last error: {last_error}")
+    return False, last_error
 
 
 # ================== PUSH NOTIFICATIONS ==================
@@ -685,7 +678,7 @@ async def register(data: UserRegister):
     try:
         code = generate_otp()
         await store_otp(data.phone, code, 'verify_phone')
-        sms_sent = await send_sms_otp(data.phone, code, 'verify_phone')
+        sms_sent, _ = await send_sms_otp(data.phone, code, 'verify_phone')
     except Exception as otp_err:
         logger.error(f"[register] OTP step failed for {data.phone}: {otp_err}")
     return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone'], "sms_sent": sms_sent}
@@ -723,9 +716,9 @@ async def send_otp_endpoint(req: SendOtpRequest):
             raise HTTPException(status_code=404, detail="No account found with this phone number")
     code = generate_otp()
     await store_otp(phone, code, req.purpose)
-    sent = await send_sms_otp(phone, code, req.purpose)
+    sent, sms_error = await send_sms_otp(phone, code, req.purpose)
     if not sent:
-        raise HTTPException(status_code=503, detail="Could not send SMS. Check your phone number or try again later.")
+        raise HTTPException(status_code=503, detail=f"Could not send SMS: {sms_error}")
     return {"message": "OTP sent successfully"}
 
 @api_router.post("/auth/verify-phone")
