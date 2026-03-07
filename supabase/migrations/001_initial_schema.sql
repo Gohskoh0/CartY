@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   expires_at TIMESTAMPTZ DEFAULT (now() + INTERVAL '10 minutes')
 );
 
+-- Patch existing tables with missing columns:
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_phone_verified BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS state TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS country TEXT DEFAULT 'NG';
+
 -- If otp_codes already exists without the 'used' column, add it:
 ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS used BOOLEAN DEFAULT FALSE NOT NULL;
 

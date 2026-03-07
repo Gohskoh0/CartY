@@ -678,7 +678,6 @@ async def register(data: UserRegister):
         "password_hash": hash_password(data.password),
         "country": data.country.upper(),
         "state": data.state,
-        "is_phone_verified": False,
     }).execute())
     user = result.data[0]
     # Send OTP but never let failures block account creation
