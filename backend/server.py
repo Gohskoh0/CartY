@@ -357,7 +357,6 @@ async def verify_otp_code(phone: str, code: str, purpose: str) -> bool:
     result = await db(lambda: supabase.table('otp_codes')
         .select('*')
         .eq('phone', phone)
-        .eq('code', code)
         .eq('purpose', purpose)
         .eq('used', False)
         .execute())
@@ -370,71 +369,80 @@ async def verify_otp_code(phone: str, code: str, purpose: str) -> bool:
             return False
     except Exception:
         return False
-    await db(lambda: supabase.table('otp_codes').update({'used': True}).eq('id', otp['id']).execute())
-    return True
-
-async def send_sms_otp(phone: str, code: str, purpose: str):
-    """Send OTP via Termii. Returns (True, '') on success or (False, error_msg) on failure."""
-    if purpose == 'verify_phone':
-        message = f"Your CartY verification code is {code}. Valid for 10 minutes. Do not share."
+    stored = otp['code']
+    if stored.startswith('TERMII:'):
+        pin_id = stored[7:]
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    'https://api.ng.termii.com/api/sms/otp/verify',
+                    json={'api_key': TERMII_API_KEY, 'pin_id': pin_id, 'pin': code}
+                )
+            data = resp.json()
+            logger.info(f'[OTP] Termii verify: {data}')
+            if data.get('verified') in (True, 'True', 'true'):
+                await db(lambda: supabase.table('otp_codes').update({'used': True}).eq('id', otp['id']).execute())
+                return True
+            return False
+        except Exception as e:
+            logger.error(f'[OTP] Termii verify error: {e}')
+            return False
     else:
-        message = f"Your CartY password reset code is {code}. Valid for 10 minutes. Do not share."
+        if stored != code:
+            return False
+        await db(lambda: supabase.table('otp_codes').update({'used': True}).eq('id', otp['id']).execute())
+        return True
 
-    logger.info(f"[OTP] Phone={phone} Code={code} Purpose={purpose}")
+async def send_sms_otp(phone: str, purpose: str):
+    """Send OTP via Termii Token API. Returns (True, pin_id) or (False, error_msg)."""
+    if purpose == 'verify_phone':
+        msg = 'Your CartY verification code is < 1234 >. Valid for 10 minutes. Do not share.'
+    else:
+        msg = 'Your CartY password reset code is < 1234 >. Valid for 10 minutes. Do not share.'
 
     if not TERMII_API_KEY:
-        logger.error("[SMS] TERMII_API_KEY not set in Railway environment variables")
-        return False, "SMS service not configured"
+        logger.error('[SMS] TERMII_API_KEY not set')
+        return False, 'SMS service not configured'
 
-    # Normalise to international format (Nigeria: 0XXXXXXXXXX → 234XXXXXXXXXX)
     clean = re.sub(r'[^0-9]', '', phone)
     if clean.startswith('0'):
         clean = '234' + clean[1:]
     elif not clean.startswith('234'):
         clean = '234' + clean
-    logger.info(f"[SMS] Sending to: {clean}")
+    logger.info(f'[SMS] Sending OTP to {clean}')
 
-    last_error = "No attempts made"
-    attempts = [
-        ('dnd',     'N-Alert'),
-        ('generic', 'N-Alert'),
-        ('generic', 'Termii'),
-    ]
-
-    for channel, sender in attempts:
+    last_error = 'No attempts made'
+    for channel, sender in [('dnd', 'N-Alert'), ('generic', 'N-Alert')]:
         try:
             payload = {
-                "api_key": TERMII_API_KEY,
-                "to": clean,
-                "from": sender,
-                "sms": message,
-                "type": "plain",
-                "channel": channel,
+                'api_key': TERMII_API_KEY,
+                'message_type': 'NUMERIC',
+                'to': clean,
+                'from': sender,
+                'channel': channel,
+                'pin_attempts': 5,
+                'pin_time_to_live': 10,
+                'pin_length': 6,
+                'pin_placeholder': '< 1234 >',
+                'message_text': msg,
+                'pin_type': 'NUMERIC',
             }
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post("https://api.ng.termii.com/api/sms/send", json=payload)
-            try:
-                result = resp.json()
-            except Exception:
-                result = {}
-
-            logger.info(f"[SMS] Termii {channel}/{sender}: HTTP {resp.status_code} → {result}")
-
-            if resp.status_code == 200 and result.get("code") == "ok":
-                logger.info(f"[SMS] Delivered via {channel}/{sender}")
-                return True, ""
-
-            err_code = result.get("code", resp.status_code)
-            err_msg  = result.get("message", resp.text[:300])
-            last_error = f"{channel}/{sender}: [{err_code}] {err_msg}"
-            logger.warning(f"[SMS] Failed — {last_error}")
-
+                resp = await client.post('https://api.ng.termii.com/api/sms/otp/send', json=payload)
+            data = resp.json()
+            logger.info(f'[SMS] Termii OTP {channel}/{sender}: HTTP {resp.status_code} -> {data}')
+            pin_id = data.get('pinId') or data.get('pin_id', '')
+            if pin_id and resp.status_code == 200:
+                logger.info(f'[SMS] OTP sent via {channel}/{sender}, pinId={pin_id}')
+                return True, pin_id
+            last_error = f'{channel}/{sender}: {data.get("message", resp.text[:200])}'
+            logger.warning(f'[SMS] Failed: {last_error}')
         except Exception as e:
             last_error = str(e)
-            logger.error(f"[SMS] Exception {channel}/{sender}: {e}")
+            logger.error(f'[SMS] Exception {channel}/{sender}: {e}')
 
-    logger.error(f"[SMS] All attempts failed. Last error: {last_error}")
     return False, last_error
+
 
 
 # ================== PUSH NOTIFICATIONS ==================
@@ -676,11 +684,14 @@ async def register(data: UserRegister):
     # Send OTP but never let failures block account creation
     sms_sent = False
     try:
-        code = generate_otp()
-        await store_otp(data.phone, code, 'verify_phone')
-        sms_sent, _ = await send_sms_otp(data.phone, code, 'verify_phone')
+        sent, pin_id = await send_sms_otp(data.phone, 'verify_phone')
+        if sent:
+            await store_otp(data.phone, f'TERMII:{pin_id}', 'verify_phone')
+            sms_sent = True
+        else:
+            logger.error(f'[register] OTP not sent: {pin_id}')
     except Exception as otp_err:
-        logger.error(f"[register] OTP step failed for {data.phone}: {otp_err}")
+        logger.error(f'[register] OTP step failed: {otp_err}')
     return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone'], "sms_sent": sms_sent}
 
 @api_router.post("/auth/login")
@@ -714,11 +725,10 @@ async def send_otp_endpoint(req: SendOtpRequest):
         user = one(await db(lambda: supabase.table('users').select('id').eq('phone', phone).limit(1).execute()))
         if not user:
             raise HTTPException(status_code=404, detail="No account found with this phone number")
-    code = generate_otp()
-    await store_otp(phone, code, req.purpose)
-    sent, sms_error = await send_sms_otp(phone, code, req.purpose)
+    sent, result = await send_sms_otp(phone, req.purpose)
     if not sent:
-        raise HTTPException(status_code=503, detail=f"Could not send SMS: {sms_error}")
+        raise HTTPException(status_code=503, detail=f'Could not send SMS: {result}')
+    await store_otp(phone, f'TERMII:{result}', req.purpose)
     return {"message": "OTP sent successfully"}
 
 @api_router.post("/auth/verify-phone")
