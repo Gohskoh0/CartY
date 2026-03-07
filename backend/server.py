@@ -412,13 +412,21 @@ async def send_sms_otp(phone: str, purpose: str):
     logger.info(f'[SMS] Sending OTP to {clean}')
 
     last_error = 'No attempts made'
-    for channel, sender in [('dnd', 'N-Alert'), ('generic', 'N-Alert')]:
+    # Attempt order:
+    # 1. voice  — Termii calls the number and reads the OTP (no sender registration needed)
+    # 2. dnd    — DND-bypass SMS via N-Alert (requires DND access on Termii account)
+    # 3. generic — standard SMS via N-Alert (requires sender registration)
+    attempts = [
+        ('voice',   ''),
+        ('dnd',     'N-Alert'),
+        ('generic', 'N-Alert'),
+    ]
+    for channel, sender in attempts:
         try:
             payload = {
                 'api_key': TERMII_API_KEY,
                 'message_type': 'NUMERIC',
                 'to': clean,
-                'from': sender,
                 'channel': channel,
                 'pin_attempts': 5,
                 'pin_time_to_live': 10,
@@ -427,19 +435,21 @@ async def send_sms_otp(phone: str, purpose: str):
                 'message_text': msg,
                 'pin_type': 'NUMERIC',
             }
+            if sender:
+                payload['from'] = sender
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post('https://api.ng.termii.com/api/sms/otp/send', json=payload)
             data = resp.json()
-            logger.info(f'[SMS] Termii OTP {channel}/{sender}: HTTP {resp.status_code} -> {data}')
+            logger.info(f'[SMS] Termii OTP {channel}: HTTP {resp.status_code} -> {data}')
             pin_id = data.get('pinId') or data.get('pin_id', '')
             if pin_id and resp.status_code == 200:
-                logger.info(f'[SMS] OTP sent via {channel}/{sender}, pinId={pin_id}')
+                logger.info(f'[SMS] OTP sent via {channel}, pinId={pin_id}')
                 return True, pin_id
-            last_error = f'{channel}/{sender}: {data.get("message", resp.text[:200])}'
+            last_error = f'{channel}: {data.get("message", resp.text[:300])}'
             logger.warning(f'[SMS] Failed: {last_error}')
         except Exception as e:
             last_error = str(e)
-            logger.error(f'[SMS] Exception {channel}/{sender}: {e}')
+            logger.error(f'[SMS] Exception {channel}: {e}')
 
     return False, last_error
 
