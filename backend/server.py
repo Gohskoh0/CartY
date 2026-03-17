@@ -396,7 +396,15 @@ async def verify_otp_code(phone: str, code: str, purpose: str) -> bool:
         return True
 
 async def send_sms_otp(phone: str, purpose: str):
-    """Send OTP via Termii Token API. Returns (True, pin_id) or (False, error_msg)."""
+    """Send OTP via Termii Token API. Returns (True, pin_id) or (False, error_msg).
+
+    Attempt order:
+    1. Voice Token  — POST /api/sms/otp/send/voice — phone call, NO sender ID required
+    2. SMS Token    — POST /api/sms/otp/send        — SMS via approved sender (CartY once approved)
+    3. In-App Token — POST /api/sms/otp/generate    — generates code server-side (no SMS sent)
+                      pinId can still be verified via /api/sms/otp/verify
+                      Code is logged to Railway logs; admin shares manually until SMS is approved
+    """
     if purpose == 'verify_phone':
         msg = 'Your CartY verification code is < 1234 >. Valid for 10 minutes. Do not share.'
     else:
@@ -414,48 +422,89 @@ async def send_sms_otp(phone: str, purpose: str):
     logger.info(f'[SMS] Sending OTP to {clean}')
 
     last_error = 'No attempts made'
-    # Attempt order:
-    # 1. voice  — Termii calls the number and reads the OTP (no sender registration needed)
-    # 2. dnd    — DND-bypass SMS via N-Alert (requires DND access on Termii account)
-    # 3. generic — standard SMS via N-Alert (requires sender registration)
-    attempts = [
-        ('voice',   ''),
-        ('dnd',     'N-Alert'),
-        ('generic', 'N-Alert'),
-    ]
-    for channel, sender in attempts:
-        try:
-            payload = {
-                'api_key': TERMII_API_KEY,
-                'message_type': 'NUMERIC',
-                'to': clean,
-                'channel': channel,
-                'pin_attempts': 5,
-                'pin_time_to_live': 10,
-                'pin_length': 6,
-                'pin_placeholder': '< 1234 >',
-                'message_text': msg,
-                'pin_type': 'NUMERIC',
-            }
-            if sender:
-                payload['from'] = sender
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post('https://api.ng.termii.com/api/sms/otp/send', json=payload)
-            data = resp.json()
-            logger.info(f'[SMS] Termii OTP {channel}: HTTP {resp.status_code} -> {data}')
-            pin_id = data.get('pinId') or data.get('pin_id', '')
-            if pin_id and resp.status_code == 200:
-                logger.info(f'[SMS] OTP sent via {channel}, pinId={pin_id}')
-                return True, pin_id
-            last_error = f'{channel}: {data.get("message", resp.text[:300])}'
-            logger.warning(f'[SMS] Failed: {last_error}')
-        except Exception as e:
-            last_error = str(e)
-            logger.error(f'[SMS] Exception {channel}: {e}')
 
-    # All Termii attempts failed — log local code to Railway so admin can share it
+    # --- Attempt 1: Voice Token (no sender ID needed) ---
+    try:
+        payload = {
+            'api_key': TERMII_API_KEY,
+            'phone_number': clean,
+            'pin_attempts': 5,
+            'pin_time_to_live': 10,
+            'pin_length': 6,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post('https://api.ng.termii.com/api/sms/otp/send/voice', json=payload)
+        data = resp.json()
+        logger.info(f'[SMS] Voice OTP: HTTP {resp.status_code} -> {data}')
+        pin_id = data.get('pinId') or data.get('pin_id', '')
+        if pin_id and resp.status_code == 200:
+            logger.info(f'[SMS] OTP sent via voice call, pinId={pin_id}')
+            return True, pin_id
+        last_error = f'voice: {data.get("message", resp.text[:200])}'
+        logger.warning(f'[SMS] Voice failed: {last_error}')
+    except Exception as e:
+        last_error = f'voice: {e}'
+        logger.error(f'[SMS] Voice exception: {e}')
+
+    # --- Attempt 2: SMS Token via approved sender (CartY once NCC approves it) ---
+    try:
+        payload = {
+            'api_key': TERMII_API_KEY,
+            'message_type': 'NUMERIC',
+            'to': clean,
+            'from': TERMII_SENDER_ID,
+            'channel': 'generic',
+            'pin_attempts': 5,
+            'pin_time_to_live': 10,
+            'pin_length': 6,
+            'pin_placeholder': '< 1234 >',
+            'message_text': msg,
+            'pin_type': 'NUMERIC',
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post('https://api.ng.termii.com/api/sms/otp/send', json=payload)
+        data = resp.json()
+        logger.info(f'[SMS] SMS OTP ({TERMII_SENDER_ID}/generic): HTTP {resp.status_code} -> {data}')
+        pin_id = data.get('pinId') or data.get('pin_id', '')
+        if pin_id and resp.status_code == 200:
+            logger.info(f'[SMS] OTP sent via SMS, pinId={pin_id}')
+            return True, pin_id
+        last_error = f'sms/{TERMII_SENDER_ID}: {data.get("message", resp.text[:200])}'
+        logger.warning(f'[SMS] SMS failed: {last_error}')
+    except Exception as e:
+        last_error = f'sms: {e}'
+        logger.error(f'[SMS] SMS exception: {e}')
+
+    # --- Attempt 3: In-App Token (generates code, no SMS sent) ---
+    # pinId returned can be verified with /api/sms/otp/verify
+    # Code is logged to Railway — admin shares it manually until sender is approved
+    try:
+        payload = {
+            'api_key': TERMII_API_KEY,
+            'pin_type': 'NUMERIC',
+            'phone_number': clean,
+            'pin_attempts': 5,
+            'pin_time_to_live': 10,
+            'pin_length': 6,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post('https://api.ng.termii.com/api/sms/otp/generate', json=payload)
+        data = resp.json()
+        logger.info(f'[SMS] In-App OTP: HTTP {resp.status_code} -> {data}')
+        pin_id = data.get('pinId') or data.get('pin_id', '')
+        otp_code = data.get('otp') or data.get('pin') or data.get('data', {}).get('otp', '') if isinstance(data.get('data'), dict) else ''
+        if pin_id and resp.status_code == 200:
+            logger.warning(f'[OTP-INAPP] No SMS sent. Code for {clean}: {otp_code} pinId={pin_id} — share manually or check Railway logs')
+            return True, pin_id
+        last_error = f'inapp: {data.get("message", resp.text[:200])}'
+        logger.warning(f'[SMS] In-App failed: {last_error}')
+    except Exception as e:
+        last_error = f'inapp: {e}'
+        logger.error(f'[SMS] In-App exception: {e}')
+
+    # All attempts failed — local fallback (OTP stored in DB, code in Railway logs)
     local_code = generate_otp()
-    logger.warning(f'[OTP-FALLBACK] Termii unavailable. Code for {clean}: {local_code}')
+    logger.warning(f'[OTP-FALLBACK] All Termii methods failed. Code for {clean}: {local_code} — share manually')
     return False, 'LOCAL:' + local_code + '|' + last_error
 
 
