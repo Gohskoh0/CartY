@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: carty-backend
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_PUBLIC_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TERMII_API_KEY
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_AD_ACCOUNT_ID
+        sync: false
+      - key: TIKTOK_ACCESS_TOKEN
+        sync: false
+      - key: TIKTOK_ADVERTISER_ID
+        sync: false
+      - key: ADS_MARGIN_PERCENT
+        value: 15
+      - key: TERMII_SENDER_ID
+        value: CartY
+      - key: SKIP_PHONE_VERIFICATION
+        value: ""
+

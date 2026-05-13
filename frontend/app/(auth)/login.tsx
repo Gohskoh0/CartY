@@ -21,6 +21,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
   const { login } = useAuth();
   const router = useRouter();
 
@@ -33,13 +34,19 @@ export default function Login() {
     setLoading(true);
     try {
       const userData = await login(phone, password);
-      if (!userData.phone_verified) {
-        router.replace({ pathname: '/(auth)/verify-otp', params: { phone: userData.phone } });
-      } else {
-        router.replace('/');
+
+      const phoneVerified = (userData as any)?.phone_verified;
+      if (typeof phoneVerified === 'boolean' && phoneVerified === false) {
+        router.replace({
+          pathname: '/(auth)/verify-otp',
+          params: { phone: (userData as any).phone },
+        });
+        return;
       }
+
+      router.replace('/');
     } catch (error: any) {
-      Alert.alert('Login Failed', error.message || 'Invalid credentials');
+      Alert.alert('Login Failed', error?.message || 'Invalid credentials');
     } finally {
       setLoading(false);
     }
@@ -64,7 +71,12 @@ export default function Login() {
 
           <View style={styles.form}>
             <View style={styles.inputContainer}>
-              <Ionicons name="call-outline" size={20} color="#6B7280" style={styles.inputIcon} />
+              <Ionicons
+                name="call-outline"
+                size={20}
+                color="#6B7280"
+                style={styles.inputIcon}
+              />
               <TextInput
                 style={styles.input}
                 placeholder="Phone Number"
@@ -77,7 +89,12 @@ export default function Login() {
             </View>
 
             <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#6B7280" style={styles.inputIcon} />
+              <Ionicons
+                name="lock-closed-outline"
+                size={20}
+                color="#6B7280"
+                style={styles.inputIcon}
+              />
               <TextInput
                 style={styles.input}
                 placeholder="Password"
@@ -221,3 +238,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+

@@ -21,19 +21,31 @@ import { api } from '../../../src/services/api';
 export default function Checkout() {
   const { slug, cart: cartParam } = useLocalSearchParams<{ slug: string; cart: string }>();
   const router = useRouter();
+
   const cart = cartParam ? JSON.parse(cartParam) : [];
+  const normalizedCart = cart.map((item: any) => ({
+    ...item,
+    product: item.product?.id
+      ? item.product
+      : {
+          ...item.product,
+          id: item.product?._id ?? item.product?.id,
+        },
+  }));
 
   const [buyerName, setBuyerName] = useState('');
   const [buyerPhone, setBuyerPhone] = useState('');
   const [buyerAddress, setBuyerAddress] = useState('');
   const [buyerNote, setBuyerNote] = useState('');
   const [loading, setLoading] = useState(false);
+
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
   const [reference, setReference] = useState<string | null>(null);
+
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [whatsappLink, setWhatsappLink] = useState<string | null>(null);
 
-  const cartTotal = cart.reduce(
+  const cartTotal = normalizedCart.reduce(
     (sum: number, item: any) => sum + item.product.price * item.quantity,
     0
   );
@@ -51,8 +63,8 @@ export default function Checkout() {
         buyer_phone: buyerPhone,
         buyer_address: buyerAddress,
         buyer_note: buyerNote || undefined,
-        cart_items: cart.map((item: any) => ({
-          product_id: item.product._id,
+        cart_items: normalizedCart.map((item: any) => ({
+          product_id: item.product.id,
           quantity: item.quantity,
         })),
       });
@@ -69,12 +81,18 @@ export default function Checkout() {
             },
           ]
         );
-      } else if (response.status === 'success') {
+        return;
+      }
+
+      if (response.status === 'success') {
         setPaymentUrl(response.authorization_url);
         setReference(response.reference);
+        return;
       }
+
+      Alert.alert('Payment not started', response.message || 'Try again.');
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || 'Checkout failed');
     } finally {
       setLoading(false);
     }
@@ -83,24 +101,28 @@ export default function Checkout() {
   const handleNavigationChange = async (navState: any) => {
     const { url } = navState;
 
-    if (url.includes('callback') || url.includes('success') || url.includes('reference=')) {
-      if (reference) {
-        setPaymentUrl(null);
-        setLoading(true);
-        try {
-          const result = await api.verifyPayment(slug as string, reference);
-          if (result.status === 'success') {
-            setOrderSuccess(true);
-            setWhatsappLink(result.whatsapp_link);
-          } else {
-            Alert.alert('Payment Failed', 'Your payment could not be verified. Please try again.');
-          }
-        } catch (error) {
-          Alert.alert('Error', 'Could not verify payment');
-        } finally {
-          setLoading(false);
-        }
+    // Keep this conservative; verify as soon as we see any Paystack callback/success URL.
+    if (!url) return;
+    if (!reference) return;
+
+    const looksLikeDone = url.includes('success') || url.includes('reference=') || url.includes('callback');
+    if (!looksLikeDone) return;
+
+    setPaymentUrl(null);
+    setLoading(true);
+
+    try {
+      const result = await api.verifyPayment(slug as string, reference);
+      if (result.status === 'success') {
+        setOrderSuccess(true);
+        setWhatsappLink(result.whatsapp_link);
+      } else {
+        Alert.alert('Payment Failed', 'Your payment could not be verified. Please try again.');
       }
+    } catch {
+      Alert.alert('Error', 'Could not verify payment');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -175,12 +197,16 @@ export default function Checkout() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
-          {/* Order Summary */}
+        <ScrollView
+          style={styles.scrollView}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Order Summary</Text>
-            {cart.map((item: any) => (
-              <View key={item.product._id} style={styles.orderItem}>
+            {normalizedCart.map((item: any) => (
+              <View key={item.product.id ?? item.product._id} style={styles.orderItem}>
                 <Text style={styles.orderItemName}>
                   {item.product.name} x{item.quantity}
                 </Text>
@@ -189,13 +215,13 @@ export default function Checkout() {
                 </Text>
               </View>
             ))}
+
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total</Text>
               <Text style={styles.totalAmount}>₦{cartTotal.toLocaleString()}</Text>
             </View>
           </View>
 
-          {/* Delivery Details */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Delivery Details</Text>
 
@@ -439,3 +465,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
