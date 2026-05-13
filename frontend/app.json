@@ -20,21 +20,23 @@
       "edgeToEdgeEnabled": true,
       "package": "com.carty.app"
     },
-    "web": {
-      "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
-    },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFFFF"
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/images/splash-image.png",
+          "resizeMode": "contain"
         }
       ],
       "./plugins/withApkName"
     ],
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
     "experiments": {
       "typedRoutes": true
     },
@@ -43,6 +45,12 @@
       "eas": {
         "projectId": "6032789a-26a3-4cc4-a19d-f149b8c04326"
       }
+    },
+    "splash": {
+      "image": "./assets/images/splash-image.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
     }
   }
 }
+
