@@ -56,7 +56,9 @@ logger.info(f"JWT_SECRET custom: {JWT_SECRET != 'default_secret'}")
 logger.info(f"PAYSTACK_SECRET_KEY set: {bool(PAYSTACK_SECRET_KEY)}")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    logger.critical("CRITICAL: SUPABASE_URL and/or SUPABASE_SERVICE_KEY not set — check Railway Variables tab!")
+    logger.critical("CRITICAL: SUPABASE_URL and/or SUPABASE_SERVICE_KEY not set — check Render env vars!")
+    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY")
+
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 resend.api_key = RESEND_API_KEY

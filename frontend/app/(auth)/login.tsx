@@ -35,8 +35,9 @@ export default function Login() {
     try {
       const userData = await login(phone, password);
 
+      // backend login response may not include phone_verified; treat missing as verified
       const phoneVerified = (userData as any)?.phone_verified;
-      if (typeof phoneVerified === 'boolean' && phoneVerified === false) {
+      if (phoneVerified === false) {
         router.replace({
           pathname: '/(auth)/verify-otp',
           params: { phone: (userData as any).phone },

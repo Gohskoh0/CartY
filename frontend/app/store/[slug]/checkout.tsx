@@ -29,6 +29,7 @@ export default function Checkout() {
       ? item.product
       : {
           ...item.product,
+          // ensure we always have a UUID id for backend
           id: item.product?._id ?? item.product?.id,
         },
   }));

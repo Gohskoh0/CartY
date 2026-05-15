@@ -16,6 +16,7 @@ services:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      # REQUIRED: do not rely on default secrets in production
       - key: JWT_SECRET
         sync: false
       - key: JWT_ALGORITHM
@@ -24,6 +25,8 @@ services:
         sync: false
       - key: TERMII_API_KEY
         sync: false
+      - key: TERMII_SENDER_ID
+        value: CartY
       - key: META_ACCESS_TOKEN
         sync: false
       - key: META_AD_ACCOUNT_ID
@@ -34,8 +37,7 @@ services:
         sync: false
       - key: ADS_MARGIN_PERCENT
         value: 15
-      - key: TERMII_SENDER_ID
-        value: CartY
+      # Optional: set to "1" to skip phone verification
       - key: SKIP_PHONE_VERIFICATION
         value: ""
 
