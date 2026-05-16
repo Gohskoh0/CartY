@@ -384,6 +384,19 @@ async def deactivate_store_if_expired(store: dict):
 def store_status_for_response(store: dict) -> str:
     return "active" if store_accepts_payments(store) else "inactive"
 
+def order_status_for_response(status) -> str:
+    value = str(status or "pending").strip().lower()
+    if value in {"completed", "paid", "success", "successful"}:
+        return "completed"
+    if value in {"pending", "pending_payment", "processing", "initiated"}:
+        return "pending"
+    return value or "pending"
+
+def order_record_for_response(order: dict) -> dict:
+    normalized = dict(order or {})
+    normalized["status"] = order_status_for_response(normalized.get("status"))
+    return normalized
+
 async def activate_free_trial_for_store(store_id: str) -> str:
     trial_end = (datetime.utcnow() + timedelta(days=30)).isoformat()
     await db(lambda: supabase.table('stores').update({
@@ -1165,12 +1178,18 @@ async def get_dashboard(user=Depends(get_current_user)):
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
     await deactivate_store_if_expired(store)
-    completed = many(await db(lambda: supabase.table('orders').select('total_amount').eq('store_id', store['id']).eq('status', 'completed').execute()))
-    recent = many(await db(lambda: supabase.table('orders').select('*').eq('store_id', store['id']).order('created_at', desc=True).limit(5).execute()))
+    orders = many(await db(lambda: supabase.table('orders').select('total_amount,status').eq('store_id', store['id']).execute()))
+    completed = [o for o in orders if order_status_for_response(o.get('status')) == 'completed']
+    recent = [
+        order_record_for_response(o)
+        for o in many(await db(lambda: supabase.table('orders').select('*').eq('store_id', store['id']).order('created_at', desc=True).limit(5).execute()))
+    ]
     prod_result = await db(lambda: supabase.table('products').select('id', count='exact').eq('store_id', store['id']).execute())
     return {
-        "total_orders": len(completed),
-        "total_sales": sum(o['total_amount'] for o in completed),
+        "total_orders": len(orders),
+        "completed_orders": len(completed),
+        "pending_orders": len(orders) - len(completed),
+        "total_sales": sum((o.get('total_amount') or 0) for o in completed),
         "wallet_balance": store.get("wallet_balance", 0),
         "pending_balance": store.get("pending_balance", 0),
         "total_earnings": store.get("total_earnings", 0),
@@ -1627,6 +1646,47 @@ async def get_banks(country: str = "NG"):
         logger.error(f"Banks fetch error: {e}")
         return []
 
+def paystack_error_message(data: dict, fallback: str) -> str:
+    if isinstance(data, dict):
+        if data.get("message"):
+            return str(data["message"])
+        nested = data.get("data")
+        if isinstance(nested, dict):
+            return str(nested.get("message") or nested.get("gateway_response") or fallback)
+    return fallback
+
+def paystack_payout_blocked_message(message: str) -> Optional[str]:
+    lowered = (message or "").lower()
+    if "starter business" in lowered or "third party payout" in lowered or "third-party payout" in lowered:
+        return (
+            "Paystack blocked this payout because this Paystack account is a Starter Business. "
+            "Upgrade/register the Paystack business and enable Transfers before seller withdrawals can be sent. "
+            "No wallet funds were deducted."
+        )
+    return None
+
+def ensure_paystack_transfer_accepted(data: dict, fallback: str) -> dict:
+    message = paystack_error_message(data, fallback)
+    blocked_message = paystack_payout_blocked_message(message)
+    if blocked_message:
+        raise HTTPException(status_code=403, detail=blocked_message)
+    if not data.get("status"):
+        raise HTTPException(status_code=400, detail=f"{message}. No wallet funds were deducted.")
+    transfer = data.get("data") or {}
+    transfer_status = str(transfer.get("status") or "pending").lower()
+    if transfer_status == "otp":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Paystack requires a transfer OTP before this payout can be sent. "
+                "Disable Transfers OTP in Paystack or add OTP finalization before retrying. "
+                "No wallet funds were deducted."
+            ),
+        )
+    if transfer_status in {"failed", "reversed"}:
+        raise HTTPException(status_code=400, detail=f"{message}. No wallet funds were deducted.")
+    return transfer
+
 @api_router.get("/wallet/verify-account")
 async def verify_bank_account(bank_code: str = "", account_number: str = "", user=Depends(get_current_user)):
     if not bank_code or not account_number:
@@ -1686,7 +1746,7 @@ async def request_withdrawal(data: WithdrawalRequest, user=Depends(get_current_u
     if data.amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdrawal is ₦100")
 
-    reference = f"wd_{uuid.uuid4().hex[:12]}"
+    reference = f"wd_{uuid.uuid4().hex[:24]}"
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post("https://api.paystack.co/transfer",
@@ -1694,6 +1754,7 @@ async def request_withdrawal(data: WithdrawalRequest, user=Depends(get_current_u
                 json={"source": "balance", "amount": int(data.amount * 100), "recipient": store["recipient_code"], "reason": "CartY Withdrawal", "reference": reference})
             tdata = resp.json()
 
+        ensure_paystack_transfer_accepted(tdata, "Withdrawal failed")
         await db(lambda: supabase.table('withdrawals').insert({"store_id": store['id'], "amount": data.amount, "reference": reference, "status": "pending"}).execute())
 
         if tdata.get("status"):
@@ -1733,7 +1794,7 @@ async def transfer_to_bank(data: TransferRequest, user=Depends(get_current_user)
     if data.amount < 100:
         raise HTTPException(status_code=400, detail="Minimum transfer is ₦100")
 
-    reference = f"tr_{uuid.uuid4().hex[:12]}"
+    reference = f"tr_{uuid.uuid4().hex[:24]}"
     try:
         async with httpx.AsyncClient() as client:
             # Verify account
@@ -1762,6 +1823,7 @@ async def transfer_to_bank(data: TransferRequest, user=Depends(get_current_user)
                       "reason": f"CartY Transfer to {account_name}", "reference": reference})
             tdata = tr.json()
 
+        ensure_paystack_transfer_accepted(tdata, "Transfer failed")
         await db(lambda: supabase.table('withdrawals').insert({
             "store_id": store['id'], "amount": data.amount,
             "reference": reference, "status": "pending"
@@ -1788,7 +1850,8 @@ async def get_orders(user=Depends(get_current_user)):
     store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
-    return many(await db(lambda: supabase.table('orders').select('*').eq('store_id', store['id']).order('created_at', desc=True).limit(100).execute()))
+    orders = many(await db(lambda: supabase.table('orders').select('*').eq('store_id', store['id']).order('created_at', desc=True).limit(100).execute()))
+    return [order_record_for_response(order) for order in orders]
 
 
 # ================== WEBHOOK ==================

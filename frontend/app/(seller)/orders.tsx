@@ -11,6 +11,12 @@ import { useTheme } from '../../src/context/ThemeContext';
 const FILTERS = ['All', 'Pending', 'Completed'] as const;
 type Filter = typeof FILTERS[number];
 
+const getOrderStatus = (status?: string) => {
+  const value = String(status || 'pending').toLowerCase();
+  if (['completed', 'paid', 'success', 'successful'].includes(value)) return 'completed';
+  return 'pending';
+};
+
 export default function Orders() {
   const { colors } = useTheme();
   const [orders, setOrders] = useState<any[]>([]);
@@ -28,9 +34,15 @@ export default function Orders() {
   useEffect(() => { fetchOrders(); }, []);
   const onRefresh = useCallback(() => { setRefreshing(true); fetchOrders(); }, []);
 
+  const statusCounts = {
+    All: orders.length,
+    Pending: orders.filter(o => getOrderStatus(o.status) === 'pending').length,
+    Completed: orders.filter(o => getOrderStatus(o.status) === 'completed').length,
+  };
+
   const filtered = orders.filter(o => {
     if (filter === 'All') return true;
-    return o.status === filter.toLowerCase();
+    return getOrderStatus(o.status) === filter.toLowerCase();
   });
 
   if (loading) {
@@ -59,7 +71,9 @@ export default function Orders() {
             style={[styles.filterTab, filter === f && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
             onPress={() => setFilter(f)}
           >
-            <Text style={[styles.filterText, { color: filter === f ? colors.primary : colors.textSecondary }]}>{f}</Text>
+            <Text style={[styles.filterText, { color: filter === f ? colors.primary : colors.textSecondary }]}>
+              {f} ({statusCounts[f]})
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -81,7 +95,8 @@ export default function Orders() {
         }
         renderItem={({ item: order }) => {
           const id = order.id || order._id;
-          const isCompleted = order.status === 'completed';
+          const normalizedStatus = getOrderStatus(order.status);
+          const isCompleted = normalizedStatus === 'completed';
           const isOpen = expanded === id;
           const initials = (order.buyer_name || '?')[0].toUpperCase();
 
@@ -101,7 +116,7 @@ export default function Orders() {
                     <Text style={[styles.buyerName, { color: colors.text }]}>{order.buyer_name}</Text>
                     <View style={[styles.statusBadge, { backgroundColor: isCompleted ? colors.successLight : colors.warningLight }]}>
                       <Text style={[styles.statusText, { color: isCompleted ? colors.accent : colors.warning }]}>
-                        {order.status}
+                        {normalizedStatus}
                       </Text>
                     </View>
                   </View>
