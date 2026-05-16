@@ -1860,6 +1860,15 @@ def _absolute_url(value: str, base_url: str) -> str:
         return f"{base_url}{value}"
     return value
 
+def _storefront_asset_url(base_url: str, public_path: str, suffix: str) -> str:
+    path = f"{public_path.rstrip('/')}/{suffix.lstrip('/')}"
+    return f"{base_url}{path}" if base_url else path
+
+def _storefront_image_src(value: str, base_url: str, public_path: str, suffix: str) -> str:
+    if _is_data_image(value):
+        return _storefront_asset_url(base_url, public_path, suffix)
+    return _absolute_url(value, base_url)
+
 def _data_image_response(value: str) -> Response:
     header, encoded = value.split(',', 1)
     media_type = header.split(';', 1)[0].replace('data:', '') or 'image/jpeg'
@@ -2078,7 +2087,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
         +'<h3 style="margin-bottom:8px;font-size:16px;font-weight:700">One More Step</h3>'
         +'<p style="color:#6B7280;margin-bottom:16px;font-size:14px">'+esc(msg)+'</p>'
         +'<input id="otpIn" type="tel" placeholder="Enter OTP" style="width:100%;border:1.5px solid #E5E7EB;border-radius:10px;padding:12px 16px;font-size:16px;margin-bottom:12px;color:#111827;background:#F9FAFB;box-sizing:border-box">'
-        +'<button onclick="submitOtp(\''+ref+'\',\''+orderId+'\')" style="width:100%;padding:15px;background:#4F46E5;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer">Submit OTP</button>'
+        +'<button type="button" data-submit-otp data-ref="'+esc(ref)+'" data-order-id="'+esc(orderId)+'" style="width:100%;padding:15px;background:#4F46E5;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer">Submit OTP</button>'
         +'</div>';
     }
     async function submitOtp(ref,orderId){
@@ -2098,6 +2107,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
         var addBtn=e.target.closest('[data-add]');if(addBtn){add(addBtn.dataset.add);return;}
         var qty=e.target.closest('[data-qty]');if(qty){chQty(qty.dataset.qty,parseInt(qty.dataset.delta,10));return;}
         var cartQty=e.target.closest('[data-cart-qty]');if(cartQty){chQty(cartQty.dataset.cartQty,parseInt(cartQty.dataset.delta,10));return;}
+        var otp=e.target.closest('[data-submit-otp]');if(otp){submitOtp(otp.dataset.ref,otp.dataset.orderId);return;}
         var checkout=e.target.closest('[data-checkout]');if(checkout){doCheckout();return;}
       });
       var overlay=document.getElementById('overlay');
@@ -2149,9 +2159,10 @@ def _build_storefront_html(store: dict, products: list, slug: str, base_url: str
     public_path = public_path or f"/store/{slug}"
     public_url = f"{base_url}{public_path}" if base_url else public_path
     logo_letter = _h(store_name_raw[0].upper())
+    logo_src = _storefront_image_src(store.get('logo') or '', base_url, public_path, 'logo.jpg')
     logo_html = (
-        f'<img class="logo-img" src="{_h(store["logo"])}" alt="logo">'
-        if store.get('logo')
+        f'<img class="logo-img" src="{_h(logo_src)}" alt="logo">'
+        if logo_src
         else f'<div class="logo-placeholder">{logo_letter}</div>'
     )
     header_html = (
@@ -2170,9 +2181,15 @@ def _build_storefront_html(store: dict, products: list, slug: str, base_url: str
         cards = []
         for p in products:
             pid = str(p.get('id', ''))
+            product_image_src = _storefront_image_src(
+                p.get('image') or '',
+                base_url,
+                public_path,
+                f"product/{urllib.parse.quote(pid, safe='')}.jpg",
+            )
             img_html = (
-                f'<img class="prod-img" src="{_h(p["image"])}" alt="{_h(p.get("name", ""))}">'
-                if p.get('image')
+                f'<img class="prod-img" src="{_h(product_image_src)}" alt="{_h(p.get("name", ""))}">'
+                if product_image_src
                 else '<div class="prod-ph">&#x1F6CD;&#xFE0F;</div>'
             )
             desc_html = (
@@ -2333,6 +2350,45 @@ async def short_storefront_preview_image(slug: str):
 @app.get("/{slug}/preview.jpg")
 async def short_storefront_preview_jpg(slug: str):
     return await storefront_preview_image(slug)
+
+async def _storefront_logo_response(slug: str):
+    store = one(await db(lambda: supabase.table('stores').select(
+        'logo'
+    ).eq('slug', slug).limit(1).execute()))
+    image = (store or {}).get('logo') or ''
+    if _is_data_image(image):
+        return _data_image_response(image)
+    return Response(status_code=404)
+
+@app.get("/store/{slug}/logo.jpg")
+async def storefront_logo_jpg(slug: str):
+    return await _storefront_logo_response(slug)
+
+@app.get("/{slug}/logo.jpg")
+async def short_storefront_logo_jpg(slug: str):
+    return await _storefront_logo_response(slug)
+
+async def _storefront_product_image_response(slug: str, product_id: str):
+    store = one(await db(lambda: supabase.table('stores').select(
+        'id'
+    ).eq('slug', slug).limit(1).execute()))
+    if not store:
+        return Response(status_code=404)
+    product = one(await db(lambda: supabase.table('products').select(
+        'image'
+    ).eq('store_id', store['id']).eq('id', product_id).eq('is_active', True).limit(1).execute()))
+    image = (product or {}).get('image') or ''
+    if _is_data_image(image):
+        return _data_image_response(image)
+    return Response(status_code=404)
+
+@app.get("/store/{slug}/product/{product_id}.jpg")
+async def storefront_product_jpg(slug: str, product_id: str):
+    return await _storefront_product_image_response(slug, product_id)
+
+@app.get("/{slug}/product/{product_id}.jpg")
+async def short_storefront_product_jpg(slug: str, product_id: str):
+    return await _storefront_product_image_response(slug, product_id)
 
 @app.get("/store/{slug}/payment", response_class=HTMLResponse)
 async def payment_page(slug: str, reference: str = '', trxref: str = ''):
