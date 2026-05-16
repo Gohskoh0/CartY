@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,9 @@ import {
   TouchableOpacity,
   Image,
   ActivityIndicator,
-  TextInput,
+  Alert,
 } from 'react-native';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +20,8 @@ interface CartItem {
   quantity: number;
 }
 
+const getProductId = (product: any) => String(product?.id ?? product?._id ?? '');
+
 export default function Storefront() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
   const router = useRouter();
@@ -26,32 +29,60 @@ export default function Storefront() {
   const [products, setProducts] = useState<any[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (slug) {
-      fetchStorefront();
-    }
-  }, [slug]);
+  // Search disabled for production build: show all products.
+  const filteredProducts = products || [];
+  const storeAcceptsOrders = store?.subscription_status === 'active';
 
-  const fetchStorefront = async () => {
+  const fetchStorefront = useCallback(async () => {
+    if (!slug) return;
+
     try {
+      setLoading(true);
+      setError(null);
+
       const data = await api.getStorefront(slug as string);
       setStore(data.store);
-      setProducts(data.products);
+      setProducts(Array.isArray(data.products) ? data.products : []);
     } catch (err: any) {
       setError(err.message || 'Store not found');
+      setStore(null);
+      setProducts([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [slug]);
+
+  useEffect(() => {
+    // Always re-fetch on (re)mount and whenever the slug changes.
+    // This prevents stale UI after signout/signin navigation.
+    void fetchStorefront();
+  }, [fetchStorefront]);
+
+  useEffect(() => {
+    // Hard refresh products if this screen gets reused by navigation.
+    // Keeps storefront consistent with auth/session changes.
+    if (!loading && error == null && slug) {
+      void fetchStorefront();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
 
   const addToCart = (product: any) => {
+    if (!storeAcceptsOrders) {
+      Alert.alert('Store Not Active', 'This store is not currently accepting orders.');
+      return;
+    }
+
     setCart((prev) => {
-      const existing = prev.find((item) => item.product._id === product._id);
+      const productId = getProductId(product);
+      const existing = prev.find((item) => getProductId(item.product) === productId);
       if (existing) {
         return prev.map((item) =>
-          item.product._id === product._id
+          getProductId(item.product) === productId
             ? { ...item, quantity: item.quantity + 1 }
             : item
         );
@@ -62,20 +93,20 @@ export default function Storefront() {
 
   const removeFromCart = (productId: string) => {
     setCart((prev) => {
-      const existing = prev.find((item) => item.product._id === productId);
+      const existing = prev.find((item) => getProductId(item.product) === productId);
       if (existing && existing.quantity > 1) {
         return prev.map((item) =>
-          item.product._id === productId
+          getProductId(item.product) === productId
             ? { ...item, quantity: item.quantity - 1 }
             : item
         );
       }
-      return prev.filter((item) => item.product._id !== productId);
+      return prev.filter((item) => getProductId(item.product) !== productId);
     });
   };
 
   const getCartItemCount = (productId: string) => {
-    const item = cart.find((i) => i.product._id === productId);
+    const item = cart.find((i) => getProductId(i.product) === productId);
     return item?.quantity || 0;
   };
 
@@ -126,11 +157,13 @@ export default function Storefront() {
       {/* Products Grid */}
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.productsGrid}>
-          {products.length > 0 ? (
-            products.map((product) => {
-              const itemCount = getCartItemCount(product._id);
+          {filteredProducts.length > 0 ? (
+            filteredProducts.map((product) => {
+
+              const productId = getProductId(product);
+              const itemCount = getCartItemCount(productId);
               return (
-                <View key={product._id} style={styles.productCard}>
+                <View key={productId} style={styles.productCard}>
                   {product.image ? (
                     <Image source={{ uri: product.image }} style={styles.productImage} />
                   ) : (
@@ -150,7 +183,7 @@ export default function Storefront() {
                     <View style={styles.quantityControls}>
                       <TouchableOpacity
                         style={styles.quantityButton}
-                        onPress={() => removeFromCart(product._id)}
+                        onPress={() => removeFromCart(productId)}
                       >
                         <Ionicons name="remove" size={20} color="#4F46E5" />
                       </TouchableOpacity>
@@ -164,7 +197,7 @@ export default function Storefront() {
                     </View>
                   ) : (
                     <TouchableOpacity
-                      style={styles.addButton}
+                      style={[styles.addButton, !storeAcceptsOrders && styles.addButtonDisabled]}
                       onPress={() => addToCart(product)}
                     >
                       <Ionicons name="add" size={20} color="#FFFFFF" />
@@ -177,8 +210,9 @@ export default function Storefront() {
           ) : (
             <View style={styles.emptyProducts}>
               <Ionicons name="cube-outline" size={64} color="#D1D5DB" />
-              <Text style={styles.emptyText}>No products available</Text>
+              <Text style={styles.emptyText}>No products found</Text>
             </View>
+
           )}
         </View>
       </ScrollView>
@@ -314,6 +348,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 10,
     marginTop: 8,
+  },
+  addButtonDisabled: {
+    backgroundColor: '#9CA3AF',
   },
   addButtonText: {
     color: '#FFFFFF',

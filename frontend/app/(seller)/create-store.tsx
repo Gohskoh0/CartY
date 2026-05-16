@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../../src/services/api';
 import { useAuth } from '../../src/context/AuthContext';
 
@@ -50,16 +51,31 @@ export default function CreateStore() {
 
     setLoading(true);
     try {
+      const pendingSubscription = await AsyncStorage.getItem('pending_subscription_after_store');
       await api.createStore({
         name,
         whatsapp_number: whatsappNumber,
         email: email || undefined,
         logo: logo || undefined,
+        start_free_trial: true,
       });
-      await refreshUser();
-      Alert.alert('Success', 'Your store has been created!', [
-        { text: 'OK', onPress: () => router.replace('/(seller)/dashboard') },
+      await api.activateFreeTrialForMyStore();
+      await Promise.all([
+        AsyncStorage.removeItem('pending_free_trial'),
+        AsyncStorage.removeItem('pending_subscription_after_store'),
       ]);
+      await refreshUser();
+      if (pendingSubscription === 'true') {
+        Alert.alert('Success', 'Your store has been created. You can activate your subscription now.', [
+          { text: 'OK', onPress: () => router.replace('/(seller)/subscribe') },
+        ]);
+      } else {
+        Alert.alert(
+          'Success',
+          'Your store has been created with a 1 month free trial!',
+          [{ text: 'OK', onPress: () => router.replace('/(seller)/dashboard') }]
+        );
+      }
     } catch (error: any) {
       Alert.alert('Error', error.message);
     } finally {

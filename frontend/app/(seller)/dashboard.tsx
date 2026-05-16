@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, Share, Alert, ActivityIndicator, Platform,
+  RefreshControl, Share, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -35,9 +35,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (user && !user.has_store) router.replace('/(seller)/create-store');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const fetchDashboard = async () => {
+
+  const fetchDashboard = useCallback(async () => {
     try {
       const data = await api.getDashboard();
       setDashboard(data);
@@ -51,20 +53,33 @@ export default function Dashboard() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [router]);
 
-  useEffect(() => { fetchDashboard(); }, []);
+  useEffect(() => {
+    void fetchDashboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const onRefresh = useCallback(() => { setRefreshing(true); fetchDashboard(); }, []);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    void fetchDashboard();
+  }, [fetchDashboard]);
 
-  const getStoreUrl = () => `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/store/${dashboard?.store_slug}`;
+
+
+  const getStoreUrl = () => `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/${dashboard?.store_slug}`;
 
   const handleShareStore = async () => {
     if (!dashboard?.store_slug) return Alert.alert('Not ready', 'Create your store first.');
+    const storeUrl = getStoreUrl();
     try {
-      await Share.share({ message: `Check out my store on CartY!\n\n${getStoreUrl()}` });
+      await Share.share({
+        title: `${storeName} on CartY`,
+        message: `Check out ${storeName} on CartY\n${storeUrl}`,
+        url: storeUrl,
+      });
     } catch {
-      await Clipboard.setStringAsync(getStoreUrl());
+      await Clipboard.setStringAsync(storeUrl);
       Alert.alert('Copied!', 'Store link copied to clipboard');
     }
   };

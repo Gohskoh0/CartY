@@ -18,6 +18,7 @@ import { useRouter, Link } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/context/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const COUNTRIES = [
   { code: 'NG', name: 'Nigeria', flag: '🇳🇬', currency: 'NGN' },
@@ -67,6 +68,9 @@ export default function Register() {
   const [stateSearch, setStateSearch] = useState('');
 
   const { register } = useAuth();
+  const [showTrialModal, setShowTrialModal] = useState(false);
+  const [trialLoading, setTrialLoading] = useState(false);
+
   const router = useRouter();
 
   const filteredCountries = useMemo(() => {
@@ -103,12 +107,40 @@ export default function Register() {
 
     setLoading(true);
     try {
-      const userData = await register(phone, password, selectedCountry.code, selectedState);
-      router.replace({ pathname: '/(auth)/verify-otp', params: { phone: userData.phone } });
+      await register(phone, password, selectedCountry.code, selectedState);
+      // After successful signup, show the free-trial subscribe popup.
+      setShowTrialModal(true);
     } catch (error: any) {
       Alert.alert('Registration Failed', error.message || 'Something went wrong');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleContinueWithTrial = async () => {
+    setTrialLoading(true);
+    try {
+      await AsyncStorage.setItem('pending_free_trial', 'true');
+      setShowTrialModal(false);
+      router.replace('/(seller)/create-store');
+    } catch (error: any) {
+      Alert.alert('Trial Activation Failed', error?.message || 'Please try again.');
+    } finally {
+      setTrialLoading(false);
+    }
+  };
+
+  const handleSubscribeAfterStore = async () => {
+    setTrialLoading(true);
+    try {
+      await AsyncStorage.setItem('pending_subscription_after_store', 'true');
+      await AsyncStorage.removeItem('pending_free_trial');
+      setShowTrialModal(false);
+      router.replace('/(seller)/create-store');
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Please try again.');
+    } finally {
+      setTrialLoading(false);
     }
   };
 
@@ -345,6 +377,61 @@ export default function Register() {
           </View>
         </View>
       </Modal>
+
+      {/* Transparent-like professional trial/subscribe popup */}
+      <Modal visible={showTrialModal} animationType="fade" transparent>
+        <View style={styles.trialOverlay}>
+          <View style={styles.trialBackdrop} />
+
+          <View style={styles.trialModalCard}>
+            <View style={styles.trialIconWrap}>
+              <Ionicons name="sparkles-outline" size={26} color="#FFFFFF" />
+            </View>
+            <Text style={styles.trialModalTitle}>Start selling today</Text>
+            <Text style={styles.trialModalSubtitle}>
+              Activate CartY now or continue with your 1 month free trial.
+            </Text>
+            <View style={styles.trialFeatureList}>
+              <Text style={styles.trialFeature}>• Receive payments from buyers online</Text>
+              <Text style={styles.trialFeature}>• Wallet payouts & order tracking</Text>
+              <Text style={styles.trialFeature}>• Promote your products</Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.trialPrimaryBtn, trialLoading && { opacity: 0.7 }]}
+              onPress={handleSubscribeAfterStore}
+              disabled={trialLoading}
+            >
+              <Text style={styles.trialPrimaryBtnText}>Activate Subscription</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.trialOrText}>or</Text>
+
+            <TouchableOpacity
+              style={[styles.trialSecondaryBtn, trialLoading && { opacity: 0.7 }]}
+              onPress={handleContinueWithTrial}
+              disabled={trialLoading}
+            >
+              {trialLoading ? (
+                <ActivityIndicator color="#4F46E5" />
+              ) : (
+                <Text style={styles.trialSecondaryBtnText}>Continue with 1 month free trial</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.trialCloseBtn}
+              onPress={() => {
+                setShowTrialModal(false);
+                router.replace('/(seller)/create-store');
+              }}
+              disabled={trialLoading}
+            >
+              <Ionicons name="close" size={18} color="#E5E7EB" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -387,7 +474,123 @@ const styles = StyleSheet.create({
   pickerModal: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, height: '70%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
+
+  trialOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 22,
+  },
+
+  trialBackdrop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.58)',
+  },
+
+  trialModalCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: 'rgba(30,41,59,0.82)',
+    borderColor: 'rgba(255,255,255,0.24)',
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: 22,
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: 10,
+  },
+
+  trialIconWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: 'rgba(79,70,229,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+
+  trialModalTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginBottom: 8,
+  },
+
+  trialModalSubtitle: {
+    fontSize: 14,
+    color: '#CBD5E1',
+    lineHeight: 20,
+    marginBottom: 18,
+  },
+
+  trialFeatureList: {
+    gap: 7,
+    marginBottom: 18,
+  },
+
+  trialFeature: {
+    fontSize: 13.5,
+    color: '#E2E8F0',
+  },
+
+  trialPrimaryBtn: {
+    backgroundColor: '#4F46E5',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  trialPrimaryBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+
+  trialOrText: {
+    textAlign: 'center',
+    color: '#CBD5E1',
+    marginBottom: 10,
+    fontWeight: '700',
+  },
+
+  trialSecondaryBtn: {
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trialSecondaryBtnText: {
+    color: '#3730A3',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+
+  trialCloseBtn: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+
   searchBox: {
+
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#F3F4F6', borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12, gap: 8,

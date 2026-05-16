@@ -46,6 +46,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.log('Auth load error:', error);
       await AsyncStorage.removeItem('token');
+      api.setToken(null);
+      setToken(null);
+      setUser(null);
     } finally {
       setIsLoading(false);
     }

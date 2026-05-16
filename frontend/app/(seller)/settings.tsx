@@ -25,8 +25,9 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { api } from '../../src/services/api';
 
 export default function Settings() {
-  const { user, logout } = useAuth();
-  const { themeMode, isDark, colors, setThemeMode } = useTheme();
+
+  const { logout } = useAuth();
+  const { themeMode, colors, setThemeMode } = useTheme();
   const router = useRouter();
   const [store, setStore] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -47,8 +48,8 @@ export default function Settings() {
       setName(data.name);
       setWhatsappNumber(data.whatsapp_number || '');
       setEmail(data.email || '');
-    } catch (error) {
-      console.log('Store error:', error);
+    } catch {
+      // ignore
     } finally {
       setLoading(false);
     }
@@ -70,8 +71,8 @@ export default function Settings() {
         await api.updateStore({ logo });
         setStore({ ...store, logo });
         Alert.alert('Success', 'Logo updated!');
-      } catch (error: any) {
-        Alert.alert('Error', error.message);
+      } catch {
+        Alert.alert('Error', 'Failed to update logo');
       } finally {
         setSaving(false);
       }
@@ -89,8 +90,8 @@ export default function Settings() {
       setStore({ ...store, name, whatsapp_number: whatsappNumber, email });
       setEditMode(false);
       Alert.alert('Success', 'Store updated!');
-    } catch (error: any) {
-      Alert.alert('Error', error.message);
+    } catch {
+      Alert.alert('Error', 'Failed to load store');
     } finally {
       setSaving(false);
     }
@@ -98,7 +99,7 @@ export default function Settings() {
 
   const getStoreUrl = () => {
     const baseUrl = process.env.EXPO_PUBLIC_BACKEND_URL || '';
-    return `${baseUrl}/store/${store?.slug}`;
+    return `${baseUrl}/${store?.slug}`;
   };
 
   const handleShareStore = async () => {
@@ -107,14 +108,15 @@ export default function Settings() {
     
     try {
       const result = await Share.share({
-        message: `Check out my store "${store.name}" on CartY!\n\n${storeUrl}`,
+        message: `Check out ${store.name} on CartY\n${storeUrl}`,
         title: `${store.name} - CartY Store`,
+        url: storeUrl,
       });
       
       if (result.action === Share.dismissedAction) {
         // User dismissed, do nothing
       }
-    } catch (error: any) {
+    } catch {
       Alert.alert('Error', 'Failed to share store link');
     }
   };
@@ -125,7 +127,8 @@ export default function Settings() {
     try {
       await Clipboard.setStringAsync(storeUrl);
       Alert.alert('Copied!', 'Store link copied to clipboard');
-    } catch (error) {
+  
+    } catch {
       Alert.alert('Error', 'Failed to copy link');
     }
   };
@@ -150,7 +153,11 @@ export default function Settings() {
     ]);
   };
 
+
+
+  // removed unused error variables that caused lint warnings
   const themeOptions = [
+
     { value: 'light', label: 'Light', icon: 'sunny-outline' },
     { value: 'dark', label: 'Dark', icon: 'moon-outline' },
     { value: 'system', label: 'System', icon: 'phone-portrait-outline' },
@@ -220,7 +227,7 @@ export default function Settings() {
               </View>
             </TouchableOpacity>
             <Text style={[styles.storeName, { color: colors.text }]}>{store?.name}</Text>
-            <Text style={[styles.storeSlug, { color: colors.textSecondary }]}>/store/{store?.slug}</Text>
+            <Text style={[styles.storeSlug, { color: colors.textSecondary }]}>/{store?.slug}</Text>
           </View>
 
           {/* Store info edit */}

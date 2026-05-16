@@ -1,5 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -22,6 +22,7 @@ import re
 import random
 import urllib.parse
 import html as _html
+import base64
 from supabase import create_client, Client
 
 ROOT_DIR = Path(__file__).parent
@@ -55,9 +56,19 @@ logger.info(f"SUPABASE_SERVICE_KEY set: {bool(SUPABASE_SERVICE_KEY)}")
 logger.info(f"JWT_SECRET custom: {JWT_SECRET != 'default_secret'}")
 logger.info(f"PAYSTACK_SECRET_KEY set: {bool(PAYSTACK_SECRET_KEY)}")
 
+# Fail-fast in production to avoid running with insecure defaults.
+# Railway/Render may start the container even if some secrets are missing.
+if JWT_SECRET == 'default_secret':
+    # Allow local dev (when running without explicit production env).
+    # Railway sets NODE_ENV/ENV usually, but if not, use safe behavior: raise.
+    if os.environ.get('ENV', '').lower() in ('prod', 'production', 'true') or os.environ.get('RAILWAY_STATIC_URL') or os.environ.get('RENDER'):
+        logger.critical("CRITICAL: JWT_SECRET is still 'default_secret' — set JWT_SECRET for production!")
+        raise RuntimeError("Missing/unsafe JWT_SECRET")
+
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     logger.critical("CRITICAL: SUPABASE_URL and/or SUPABASE_SERVICE_KEY not set — check Render env vars!")
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY")
+
 
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -118,6 +129,7 @@ class StoreCreate(BaseModel):
     whatsapp_number: str
     email: Optional[EmailStr] = None
     logo: Optional[str] = None
+    start_free_trial: bool = False
 
 class StoreUpdate(BaseModel):
     name: Optional[str] = None
@@ -190,6 +202,7 @@ class StorefrontOtpRequest(BaseModel):
 class SendOtpRequest(BaseModel):
     phone: str
     purpose: str  # 'verify_phone' or 'forgot_password'
+
 
 class VerifyPhoneRequest(BaseModel):
     code: str
@@ -337,6 +350,47 @@ Payment Confirmed"""
     elif not clean.startswith('234'):
         clean = '234' + clean
     return f"https://wa.me/{clean}?text={urllib.parse.quote(message)}"
+
+def parse_datetime(value) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except Exception:
+        return None
+
+def store_accepts_payments(store: dict) -> bool:
+    """Active paid subscriptions and unexpired free trials both allow buyer payments."""
+    end_value = store.get("subscription_end_date") or store.get("subscription_expires_at")
+    end_date = parse_datetime(end_value)
+    if end_date:
+        now = datetime.now(end_date.tzinfo) if end_date.tzinfo else datetime.utcnow()
+        return end_date > now
+    return store.get("subscription_status") == "active"
+
+async def sync_store_subscription_state(store: dict):
+    accepts_payments = store_accepts_payments(store)
+    next_status = "active" if accepts_payments else "inactive"
+    if store.get("subscription_status") != next_status:
+        await db(lambda: supabase.table('stores').update({"subscription_status": next_status}).eq('id', store['id']).execute())
+        store["subscription_status"] = next_status
+
+async def deactivate_store_if_expired(store: dict):
+    await sync_store_subscription_state(store)
+
+def store_status_for_response(store: dict) -> str:
+    return "active" if store_accepts_payments(store) else "inactive"
+
+async def activate_free_trial_for_store(store_id: str) -> str:
+    trial_end = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    await db(lambda: supabase.table('stores').update({
+        "subscription_status": "active",
+        "subscription_expires_at": trial_end,
+        "subscription_end_date": trial_end,
+    }).eq('id', store_id).execute())
+    return trial_end
 
 
 # ================== OTP HELPERS ==================
@@ -747,21 +801,11 @@ async def register(data: UserRegister):
         "state": data.state,
     }).execute())
     user = result.data[0]
-    # Send OTP but never let failures block account creation
+    # Launch mode: phone verification disabled.
+    # Do not send OTP to avoid delivery issues.
     sms_sent = False
-    try:
-        sent, pin_or_err = await send_sms_otp(data.phone, 'verify_phone')
-        if sent:
-            await store_otp(data.phone, f'TERMII:{pin_or_err}', 'verify_phone')
-            sms_sent = True
-        elif pin_or_err.startswith('LOCAL:'):
-            local_code = pin_or_err.split('|')[0].replace('LOCAL:', '')
-            await store_otp(data.phone, local_code, 'verify_phone')
-        else:
-            logger.error(f'[register] OTP not sent: {pin_or_err}')
-    except Exception as otp_err:
-        logger.error(f'[register] OTP step failed: {otp_err}')
     return {"token": create_token(user['id']), "user_id": user['id'], "phone": user['phone'], "sms_sent": sms_sent}
+
 
 @api_router.post("/auth/login")
 async def login(data: UserLogin):
@@ -807,28 +851,30 @@ async def send_otp_endpoint(req: SendOtpRequest):
 
 @api_router.post("/auth/verify-phone")
 async def verify_phone_endpoint(req: VerifyPhoneRequest, current_user=Depends(get_current_user)):
-    if SKIP_PHONE_VERIFICATION:
-        await db(lambda: supabase.table('users').update({'is_phone_verified': True}).eq('id', current_user['id']).execute())
-        return {"message": "Phone verified successfully"}
-    valid = await verify_otp_code(current_user['phone'], req.code, 'verify_phone')
-    if not valid:
-        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    # Launch mode: phone verification disabled. Always mark verified.
     await db(lambda: supabase.table('users').update({'is_phone_verified': True}).eq('id', current_user['id']).execute())
     return {"message": "Phone verified successfully"}
+
 
 @api_router.post("/auth/reset-password")
 async def reset_password_endpoint(req: ResetPasswordRequest):
     phone = req.phone.strip()
     if len(req.new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    valid = await verify_otp_code(phone, req.code, 'forgot_password')
-    if not valid:
-        raise HTTPException(status_code=400, detail="Invalid or expired code")
+
+    # Phone OTP provider (Termii/Twilio) may be down during launch.
+    # If SMS is disabled, bypass OTP verification.
+    if not SKIP_PHONE_VERIFICATION:
+        valid = await verify_otp_code(phone, req.code, 'forgot_password')
+        if not valid:
+            raise HTTPException(status_code=400, detail="Invalid or expired code")
+
     user = one(await db(lambda: supabase.table('users').select('id').eq('phone', phone).limit(1).execute()))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     await db(lambda: supabase.table('users').update({'password_hash': hash_password(req.new_password)}).eq('id', user['id']).execute())
     return {"message": "Password reset successfully"}
+
 
 @api_router.put("/notifications/register")
 async def register_push_token(data: PushTokenRequest, user=Depends(get_current_user)):
@@ -1052,6 +1098,21 @@ async def submit_ad_otp(data: AdOtpRequest, background_tasks: BackgroundTasks, u
 
 # ================== STORE ==================
 
+@api_router.post("/subscription/trial/activate")
+async def activate_free_trial(user=Depends(get_current_user)):
+    """Activate 1-month free trial immediately for the current user's store.
+
+    Ensures sellers can accept payments during the trial.
+    """
+    store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
+    if not store:
+        return {"status": "pending_store", "message": "Create your store to start the free trial."}
+
+    trial_end = await activate_free_trial_for_store(store['id'])
+
+    return {"status": "success", "message": "Free trial activated!", "end_date": trial_end}
+
+
 @api_router.post("/stores")
 async def create_store(data: StoreCreate, user=Depends(get_current_user)):
     if one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute())):
@@ -1063,19 +1124,34 @@ async def create_store(data: StoreCreate, user=Depends(get_current_user)):
         slug = f"{base_slug}-{counter}"
         counter += 1
 
+    trial_end = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    subscription_status = "active"
+
     result = await db(lambda: supabase.table('stores').insert({
         "user_id": user['id'], "name": data.name, "slug": slug,
         "logo": data.logo, "whatsapp_number": data.whatsapp_number, "email": data.email,
         "wallet_balance": 0, "pending_balance": 0, "total_earnings": 0,
-        "subscription_status": "inactive",
+        "subscription_status": subscription_status,
+        "subscription_expires_at": trial_end,
+        "subscription_end_date": trial_end,
     }).execute())
-    return {"store": result.data[0], "slug": slug}
+    # Ensure trial expiry field naming is consistent.
+    # (Some code uses subscription_end_date, others use subscription_expires_at.)
+    created_store = result.data[0]
+    if created_store.get('subscription_expires_at') and not created_store.get('subscription_end_date'):
+        await db(lambda: supabase.table('stores').update({'subscription_end_date': created_store['subscription_expires_at']}).eq('id', created_store['id']).execute())
+        created_store['subscription_end_date'] = created_store['subscription_expires_at']
+
+    return {"store": created_store, "slug": slug, "trial_activated": True}
+
+
 
 @api_router.get("/stores/my-store")
 async def get_my_store(user=Depends(get_current_user)):
     store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
+    await deactivate_store_if_expired(store)
     return store
 
 @api_router.put("/stores/my-store")
@@ -1094,6 +1170,7 @@ async def get_dashboard(user=Depends(get_current_user)):
     store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
+    await deactivate_store_if_expired(store)
     completed = many(await db(lambda: supabase.table('orders').select('total_amount').eq('store_id', store['id']).eq('status', 'completed').execute()))
     recent = many(await db(lambda: supabase.table('orders').select('*').eq('store_id', store['id']).order('created_at', desc=True).limit(5).execute()))
     prod_result = await db(lambda: supabase.table('products').select('id', count='exact').eq('store_id', store['id']).execute())
@@ -1157,21 +1234,33 @@ async def delete_product(product_id: str, user=Depends(get_current_user)):
 
 @api_router.get("/storefront/{slug}")
 async def get_storefront(slug: str):
-    store = one(await db(lambda: supabase.table('stores').select('id,name,slug,logo,whatsapp_number,subscription_status').eq('slug', slug).limit(1).execute()))
+    store = one(await db(lambda: supabase.table('stores')
+        .select('id,name,slug,logo,whatsapp_number,subscription_status,subscription_end_date,subscription_expires_at')
+        .eq('slug', slug).limit(1).execute()))
+
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
+    await deactivate_store_if_expired(store)
     products = many(await db(lambda: supabase.table('products').select('*').eq('store_id', store['id']).eq('is_active', True).execute()))
     return {
-        "store": {k: store[k] for k in ('name', 'slug', 'logo', 'whatsapp_number', 'subscription_status')},
+        "store": {
+            "name": store["name"],
+            "slug": store["slug"],
+            "logo": store["logo"],
+            "whatsapp_number": store["whatsapp_number"],
+            "subscription_status": store_status_for_response(store),
+        },
         "products": products
     }
 
 @api_router.post("/storefront/{slug}/checkout")
 async def checkout(slug: str, data: CheckoutRequest, background_tasks: BackgroundTasks, request: Request):
+
     store = one(await db(lambda: supabase.table('stores').select('*').eq('slug', slug).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
-    if store.get("subscription_status") != "active":
+    await deactivate_store_if_expired(store)
+    if not store_accepts_payments(store):
         return {"status": "subscription_required", "message": "This store is not accepting payments.", "whatsapp_link": f"https://wa.me/{store.get('whatsapp_number','')}"}
 
     total_amount, order_items = 0, []
@@ -1256,7 +1345,8 @@ async def storefront_charge_card(slug: str, data: StorefrontCardChargeRequest, b
     store = one(await db(lambda: supabase.table('stores').select('*').eq('slug', slug).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
-    if store.get("subscription_status") != "active":
+    await deactivate_store_if_expired(store)
+    if not store_accepts_payments(store):
         return {"status": "subscription_required", "message": "This store is not accepting payments.", "whatsapp_link": f"https://wa.me/{store.get('whatsapp_number','')}"}
     total_amount, order_items = 0, []
     for item in data.cart_items:
@@ -1399,7 +1489,11 @@ async def verify_subscription(reference: str, user=Depends(get_current_user)):
             data = resp.json()
             if data.get("status") and data["data"]["status"] == "success":
                 end_date = (datetime.utcnow() + timedelta(days=30)).isoformat()
-                await db(lambda: supabase.table('stores').update({"subscription_status": "active", "subscription_end_date": end_date}).eq('id', store['id']).execute())
+                await db(lambda: supabase.table('stores').update({
+                    "subscription_status": "active",
+                    "subscription_end_date": end_date,
+                    "subscription_expires_at": end_date,
+                }).eq('id', store['id']).execute())
                 await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', reference).execute())
                 return {"status": "success", "message": "Subscription activated!", "end_date": end_date}
             return {"status": "failed", "message": "Subscription verification failed"}
@@ -1408,13 +1502,19 @@ async def verify_subscription(reference: str, user=Depends(get_current_user)):
 
 async def _activate_subscription(store_id: str, reference: str):
     end_date = (datetime.utcnow() + timedelta(days=30)).isoformat()
-    await db(lambda: supabase.table('stores').update({"subscription_status": "active", "subscription_end_date": end_date}).eq('id', store_id).execute())
+    await db(lambda: supabase.table('stores').update({
+        "subscription_status": "active",
+        "subscription_end_date": end_date,
+        "subscription_expires_at": end_date,
+    }).eq('id', store_id).execute())
     await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', reference).execute())
     return end_date
 
 @api_router.post("/subscription/charge-card")
 async def charge_subscription_card(data: SubscriptionCardChargeRequest, user=Depends(get_current_user)):
+    # If user already has an active subscription/trial, allow paying again to extend.
     store = one(await db(lambda: supabase.table('stores').select('id').eq('user_id', user['id']).limit(1).execute()))
+
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
     # Convert $7 USD → NGN at real-time rate, then → kobo
@@ -1714,7 +1814,11 @@ async def paystack_webhook(request: Request):
             pending = one(await db(lambda: supabase.table('pending_subscriptions').select('*').eq('reference', ref).limit(1).execute()))
             if pending:
                 end_date = (datetime.utcnow() + timedelta(days=30)).isoformat()
-                await db(lambda: supabase.table('stores').update({"subscription_status": "active", "subscription_end_date": end_date}).eq('id', pending['store_id']).execute())
+                await db(lambda: supabase.table('stores').update({
+                    "subscription_status": "active",
+                    "subscription_end_date": end_date,
+                    "subscription_expires_at": end_date,
+                }).eq('id', pending['store_id']).execute())
                 await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', ref).execute())
                 token = await get_store_push_token(pending['store_id'])
                 if token:
@@ -1754,6 +1858,27 @@ def _h(value) -> str:
     """HTML-escape a value for safe embedding in HTML."""
     return _html.escape(str(value or ''), quote=True)
 
+def _is_data_image(value: str) -> bool:
+    return isinstance(value, str) and value.startswith('data:image/') and ';base64,' in value
+
+def _absolute_url(value: str, base_url: str) -> str:
+    if not value:
+        return ''
+    if value.startswith('http://') or value.startswith('https://'):
+        return value
+    if value.startswith('/'):
+        return f"{base_url}{value}"
+    return value
+
+def _data_image_response(value: str) -> Response:
+    header, encoded = value.split(',', 1)
+    media_type = header.split(';', 1)[0].replace('data:', '') or 'image/jpeg'
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except Exception:
+        return Response(status_code=404)
+    return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=300"})
+
 _NOT_FOUND_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1778,12 +1903,25 @@ _NOT_FOUND_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
+
 _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CARTY_STORE_NAME | CartY</title>
+
+  <meta property="og:title" content="CARTY_STORE_NAME | CartY" />
+  <meta property="og:description" content="CARTY_OG_DESCRIPTION" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="CARTY_OG_URL" />
+  <meta property="og:image" content="CARTY_OG_IMAGE" />
+  <meta property="og:image:secure_url" content="CARTY_OG_IMAGE" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="CARTY_STORE_NAME | CartY" />
+  <meta name="twitter:description" content="CARTY_OG_DESCRIPTION" />
+  <meta name="twitter:image" content="CARTY_OG_IMAGE" />
+
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f9fafb;color:#111827}
@@ -1805,6 +1943,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     .prod-price{font-size:15px;font-weight:700;color:#4F46E5;margin-top:3px}
     .prod-desc{font-size:11px;color:#6B7280;margin-top:3px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
     .add-btn{width:100%;padding:9px;background:#4F46E5;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;border-radius:0 0 12px 12px}
+    .add-btn:disabled{background:#9CA3AF;cursor:not-allowed}
     .add-btn:active{background:#4338CA}
     .card-qty{display:none;align-items:center;justify-content:center;gap:16px;padding:10px 12px}
     .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50}
@@ -1860,12 +1999,12 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     </div>
   </div>
   <script>
-    var SLUG='CARTY_SLUG',prods=CARTY_PRODS_JSON,cart={};
+    var SLUG='CARTY_SLUG',prods=CARTY_PRODS_JSON,cart={},CAN_ORDER=CARTY_CAN_ORDER;
     function N(n){return'\u20A6'+Number(n).toLocaleString()}
     function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
     function fmtCard(el){var v=el.value.replace(/\D/g,'').slice(0,16);el.value=v.replace(/(\d{4})(?=\d)/g,'$1 ');}
     function fmtExp(el){var v=el.value.replace(/\D/g,'');if(v.length>2)v=v.slice(0,2)+'/'+v.slice(2,4);el.value=v;}
-    function add(id){cart[id]=(cart[id]||0)+1;updateUI();}
+    function add(id){if(!CAN_ORDER){alert('This store is not currently accepting orders.');return;}cart[id]=(cart[id]||0)+1;updateUI();}
     function inc(id){cart[id]=(cart[id]||0)+1;updateUI();}
     function dec(id){if(cart[id]>1)cart[id]--;else delete cart[id];updateUI();}
     function chQty(id,d){cart[id]=(cart[id]||0)+d;if(cart[id]<=0)delete cart[id];updateUI();}
@@ -1975,9 +2114,10 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>"""
 
-def _build_storefront_html(store: dict, products: list, slug: str) -> str:
+def _build_storefront_html(store: dict, products: list, slug: str, base_url: str = '') -> str:
     store_name_raw = (store.get('name') or '').strip() or 'Store'
     store_name_esc = _h(store_name_raw)
+    public_url = f"{base_url}/store/{slug}" if base_url else f"/store/{slug}"
     logo_letter = _h(store_name_raw[0].upper())
     logo_html = (
         f'<img class="logo-img" src="{_h(store["logo"])}" alt="logo">'
@@ -1990,9 +2130,10 @@ def _build_storefront_html(store: dict, products: list, slug: str) -> str:
         f'<button class="cart-btn" onclick="openCart()">&#x1F6D2;'
         f'<span class="cart-badge" id="cb">0</span></button></div>'
     )
+    can_accept_orders = store_accepts_payments(store)
     inactive_banner = (
         '<div class="inactive-banner">&#9888;&#65039; This store is not currently accepting online payments.</div>'
-        if store.get('subscription_status') != 'active'
+        if not can_accept_orders
         else ''
     )
     if products:
@@ -2015,7 +2156,7 @@ def _build_storefront_html(store: dict, products: list, slug: str) -> str:
                 f'<div class="prod-name">{_h(p.get("name", ""))}</div>'
                 f'<div class="prod-price">&#x20A6;{price_str}</div>'
                 f'{desc_html}</div>'
-                f'<button class="add-btn" onclick="add(\'{pid}\')">Add to Cart</button>'
+                f'<button class="add-btn" onclick="add(\'{pid}\')" {"disabled" if not can_accept_orders else ""}>Add to Cart</button>'
                 f'<div class="card-qty">'
                 f'<button class="qty-btn" onclick="dec(\'{pid}\')">&#8722;</button>'
                 f'<span class="card-qty-n">1</span>'
@@ -2030,14 +2171,28 @@ def _build_storefront_html(store: dict, products: list, slug: str) -> str:
         for p in products
     ]
     prods_json = json.dumps(prods_data, separators=(',', ':')).replace('</', r'<\/')
+    featured_product = next((p for p in products if p.get('image')), products[0] if products else None)
+    featured_name = (featured_product or {}).get('name') or store_name_raw
+    og_description = f"Shop {featured_name} from {store_name_raw} on CartY."
+    raw_og_image = (featured_product or {}).get('image') or store.get('logo') or ''
+    if _is_data_image(raw_og_image):
+        og_image = f"{base_url}/store/{slug}/preview-image" if base_url else f"/store/{slug}/preview-image"
+    else:
+        og_image = _absolute_url(raw_og_image, base_url)
+
+
     return (
         _STOREFRONT_TEMPLATE
         .replace('CARTY_STORE_NAME', store_name_esc)
+        .replace('CARTY_OG_DESCRIPTION', _h(og_description))
+        .replace('CARTY_OG_URL', _h(public_url))
         .replace('CARTY_HEADER_HTML', header_html)
         .replace('CARTY_INACTIVE_BANNER', inactive_banner)
         .replace('CARTY_GRID_HTML', grid_html)
         .replace('CARTY_SLUG', slug)
         .replace('CARTY_PRODS_JSON', prods_json)
+        .replace('CARTY_CAN_ORDER', 'true' if can_accept_orders else 'false')
+        .replace('CARTY_OG_IMAGE', _h(og_image))
     )
 
 PAYMENT_HTML = """<!DOCTYPE html>
@@ -2087,19 +2242,39 @@ PAYMENT_HTML = """<!DOCTYPE html>
 </html>"""
 
 @app.get("/store/{slug}", response_class=HTMLResponse)
-async def storefront_page(slug: str):
+async def storefront_page(slug: str, request: Request):
     store = one(await db(lambda: supabase.table('stores').select(
-        'id,name,slug,logo,whatsapp_number,subscription_status'
+        'id,name,slug,logo,whatsapp_number,subscription_status,subscription_end_date,subscription_expires_at'
     ).eq('slug', slug).limit(1).execute()))
     if not store:
         return HTMLResponse(_NOT_FOUND_HTML, status_code=404,
                             headers={"Cache-Control": "no-store"})
+    await deactivate_store_if_expired(store)
     products = many(await db(lambda: supabase.table('products').select('*').eq(
         'store_id', store['id']
     ).eq('is_active', True).execute()))
-    html_content = _build_storefront_html(store, products, slug)
+    html_content = _build_storefront_html(store, products, slug, get_public_base_url(request))
     return HTMLResponse(html_content,
                         headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+@app.get("/{slug}", response_class=HTMLResponse)
+async def short_storefront_page(slug: str, request: Request):
+    return await storefront_page(slug, request)
+
+@app.get("/store/{slug}/preview-image")
+async def storefront_preview_image(slug: str):
+    store = one(await db(lambda: supabase.table('stores').select(
+        'id,logo'
+    ).eq('slug', slug).limit(1).execute()))
+    if not store:
+        return Response(status_code=404)
+    products = many(await db(lambda: supabase.table('products').select('image').eq(
+        'store_id', store['id']
+    ).eq('is_active', True).execute()))
+    image = next((p.get('image') for p in products if p.get('image')), store.get('logo') or '')
+    if _is_data_image(image):
+        return _data_image_response(image)
+    return Response(status_code=404)
 
 @app.get("/store/{slug}/payment", response_class=HTMLResponse)
 async def payment_page(slug: str, reference: str = '', trxref: str = ''):

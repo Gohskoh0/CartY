@@ -82,6 +82,7 @@ class ApiService {
   }
 
   async resetPassword(phone: string, code: string, new_password: string) {
+    // Phone OTP verification is optional/bypassed in launch mode.
     return this.request('/auth/reset-password', {
       method: 'POST',
       body: JSON.stringify({ phone, code, new_password }),
@@ -89,7 +90,7 @@ class ApiService {
   }
 
   // Store
-  async createStore(data: { name: string; whatsapp_number: string; email?: string; logo?: string }) {
+  async createStore(data: { name: string; whatsapp_number: string; email?: string; logo?: string; start_free_trial?: boolean }) {
     return this.request('/stores', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -120,8 +121,10 @@ class ApiService {
   }
 
   async getProducts() {
+    // Ensure we only show products that belong to the logged-in seller.
     return this.request('/products');
   }
+
 
   async updateProduct(id: string, data: any) {
     return this.request(`/products/${id}`, {
@@ -207,6 +210,14 @@ class ApiService {
       body: JSON.stringify({ reference, otp }),
     });
   }
+
+  // Trial
+  async activateFreeTrialForMyStore() {
+    return this.request('/subscription/trial/activate', {
+      method: 'POST',
+    });
+  }
+
 
   // Storefront (public)
   async getStorefront(slug: string) {

@@ -4,7 +4,7 @@ import {
   RefreshControl, Alert, ActivityIndicator, Image, Switch, Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../../src/services/api';
 import { useTheme } from '../../src/context/ThemeContext';
@@ -14,18 +14,42 @@ export default function Products() {
   const router = useRouter();
   const { colors } = useTheme();
   const { user } = useAuth();
+  const currentStoreId = user?.store_id;
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchProducts = async () => {
-    try { setProducts(await api.getProducts()); }
-    catch { /* silent */ }
-    finally { setLoading(false); setRefreshing(false); }
-  };
+  const fetchProducts = useCallback(async () => {
+    if (!user?.has_store || !currentStoreId) {
+      setProducts([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
 
-  useEffect(() => { fetchProducts(); }, []);
-  const onRefresh = useCallback(() => { setRefreshing(true); fetchProducts(); }, []);
+    try {
+      setLoading(true);
+      const data = await api.getProducts();
+      // Debug safety: ensure it's an array
+      setProducts(Array.isArray(data) ? data : []);
+    } catch {
+      // Keep silent in UI, but avoid permanently blank screen
+      setProducts([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user?.has_store, currentStoreId]);
+
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchProducts();
+    }, [fetchProducts])
+  );
+
+  useEffect(() => { void fetchProducts(); }, [fetchProducts]);
+  const onRefresh = useCallback(() => { setRefreshing(true); fetchProducts(); }, [fetchProducts]);
 
   const toggleActive = async (product: any) => {
     try {
@@ -49,7 +73,7 @@ export default function Products() {
   const shareProduct = async (product: any) => {
     const slug = user?.store_slug;
     if (!slug) return;
-    const url = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/store/${slug}`;
+    const url = `${process.env.EXPO_PUBLIC_BACKEND_URL || ''}/${slug}`;
     try {
       await Share.share({ message: `${product.name}\n₦${Number(product.price).toLocaleString()}\n${url}` });
     } catch { /* silent */ }
