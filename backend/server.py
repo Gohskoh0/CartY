@@ -363,7 +363,7 @@ def parse_datetime(value) -> Optional[datetime]:
 
 def store_accepts_payments(store: dict) -> bool:
     """Active paid subscriptions and unexpired free trials both allow buyer payments."""
-    end_value = store.get("subscription_end_date") or store.get("subscription_expires_at")
+    end_value = store.get("subscription_end_date")
     end_date = parse_datetime(end_value)
     if end_date:
         now = datetime.now(end_date.tzinfo) if end_date.tzinfo else datetime.utcnow()
@@ -387,7 +387,6 @@ async def activate_free_trial_for_store(store_id: str) -> str:
     trial_end = (datetime.utcnow() + timedelta(days=30)).isoformat()
     await db(lambda: supabase.table('stores').update({
         "subscription_status": "active",
-        "subscription_expires_at": trial_end,
         "subscription_end_date": trial_end,
     }).eq('id', store_id).execute())
     return trial_end
@@ -1132,15 +1131,9 @@ async def create_store(data: StoreCreate, user=Depends(get_current_user)):
         "logo": data.logo, "whatsapp_number": data.whatsapp_number, "email": data.email,
         "wallet_balance": 0, "pending_balance": 0, "total_earnings": 0,
         "subscription_status": subscription_status,
-        "subscription_expires_at": trial_end,
         "subscription_end_date": trial_end,
     }).execute())
-    # Ensure trial expiry field naming is consistent.
-    # (Some code uses subscription_end_date, others use subscription_expires_at.)
     created_store = result.data[0]
-    if created_store.get('subscription_expires_at') and not created_store.get('subscription_end_date'):
-        await db(lambda: supabase.table('stores').update({'subscription_end_date': created_store['subscription_expires_at']}).eq('id', created_store['id']).execute())
-        created_store['subscription_end_date'] = created_store['subscription_expires_at']
 
     return {"store": created_store, "slug": slug, "trial_activated": True}
 
@@ -1235,7 +1228,7 @@ async def delete_product(product_id: str, user=Depends(get_current_user)):
 @api_router.get("/storefront/{slug}")
 async def get_storefront(slug: str):
     store = one(await db(lambda: supabase.table('stores')
-        .select('id,name,slug,logo,whatsapp_number,subscription_status,subscription_end_date,subscription_expires_at')
+        .select('id,name,slug,logo,whatsapp_number,subscription_status,subscription_end_date')
         .eq('slug', slug).limit(1).execute()))
 
     if not store:
@@ -1492,7 +1485,6 @@ async def verify_subscription(reference: str, user=Depends(get_current_user)):
                 await db(lambda: supabase.table('stores').update({
                     "subscription_status": "active",
                     "subscription_end_date": end_date,
-                    "subscription_expires_at": end_date,
                 }).eq('id', store['id']).execute())
                 await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', reference).execute())
                 return {"status": "success", "message": "Subscription activated!", "end_date": end_date}
@@ -1505,7 +1497,6 @@ async def _activate_subscription(store_id: str, reference: str):
     await db(lambda: supabase.table('stores').update({
         "subscription_status": "active",
         "subscription_end_date": end_date,
-        "subscription_expires_at": end_date,
     }).eq('id', store_id).execute())
     await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', reference).execute())
     return end_date
@@ -1817,7 +1808,6 @@ async def paystack_webhook(request: Request):
                 await db(lambda: supabase.table('stores').update({
                     "subscription_status": "active",
                     "subscription_end_date": end_date,
-                    "subscription_expires_at": end_date,
                 }).eq('id', pending['store_id']).execute())
                 await db(lambda: supabase.table('pending_subscriptions').delete().eq('reference', ref).execute())
                 token = await get_store_push_token(pending['store_id'])
@@ -2244,7 +2234,7 @@ PAYMENT_HTML = """<!DOCTYPE html>
 @app.get("/store/{slug}", response_class=HTMLResponse)
 async def storefront_page(slug: str, request: Request):
     store = one(await db(lambda: supabase.table('stores').select(
-        'id,name,slug,logo,whatsapp_number,subscription_status,subscription_end_date,subscription_expires_at'
+        'id,name,slug,logo,whatsapp_number,subscription_status,subscription_end_date'
     ).eq('slug', slug).limit(1).execute()))
     if not store:
         return HTMLResponse(_NOT_FOUND_HTML, status_code=404,
