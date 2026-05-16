@@ -1919,6 +1919,8 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f9fafb;color:#111827}
+    body.has-cart{padding-bottom:92px}
+    button{font-family:inherit;-webkit-tap-highlight-color:transparent}
     .header{background:#fff;padding:14px 18px;display:flex;align-items:center;gap:12px;box-shadow:0 1px 4px rgba(0,0,0,.1);position:sticky;top:0;z-index:10}
     .logo-placeholder{width:46px;height:46px;border-radius:12px;background:#EEF2FF;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#4F46E5;flex-shrink:0}
     .logo-img{width:46px;height:46px;border-radius:12px;object-fit:cover;flex-shrink:0}
@@ -1936,10 +1938,18 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     .prod-name{font-size:13px;font-weight:600;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
     .prod-price{font-size:15px;font-weight:700;color:#4F46E5;margin-top:3px}
     .prod-desc{font-size:11px;color:#6B7280;margin-top:3px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-    .add-btn{width:100%;padding:9px;background:#4F46E5;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;border-radius:0 0 12px 12px}
+    .add-btn{width:100%;padding:10px;background:#4F46E5;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;border-radius:0 0 12px 12px}
     .add-btn:disabled{background:#9CA3AF;cursor:not-allowed}
     .add-btn:active{background:#4338CA}
     .card-qty{display:none;align-items:center;justify-content:center;gap:16px;padding:10px 12px}
+    .cart-summary{position:fixed;left:14px;right:14px;bottom:14px;z-index:40;display:none;align-items:center;gap:12px;background:#111827;color:#fff;border:none;border-radius:16px;padding:13px 14px;box-shadow:0 14px 36px rgba(17,24,39,.28);cursor:pointer}
+    .cart-summary.open{display:flex}
+    .cart-summary-main{display:flex;flex-direction:column;align-items:flex-start;gap:2px;flex:1}
+    .cart-summary-count{font-size:12px;color:#D1D5DB;font-weight:600}
+    .cart-summary-total{font-size:16px;font-weight:800}
+    .cart-summary-cta{background:#4F46E5;border-radius:12px;padding:10px 14px;font-size:14px;font-weight:800;white-space:nowrap}
+    .toast{position:fixed;left:50%;bottom:88px;transform:translateX(-50%) translateY(16px);background:#111827;color:#fff;border-radius:999px;padding:10px 14px;font-size:13px;font-weight:700;box-shadow:0 10px 28px rgba(0,0,0,.24);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:60;white-space:nowrap}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
     .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50}
     .overlay.open{display:flex;align-items:flex-end}
     .sheet{background:#fff;border-radius:22px 22px 0 0;width:100%;max-height:90vh;overflow-y:auto;padding:20px}
@@ -1974,7 +1984,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
   <div class="footer">Powered by CartY</div>
   <div class="overlay" id="overlay">
     <div class="sheet">
-      <div class="sheet-header"><span class="sheet-title">Your Cart</span><button class="close-btn" onclick="closeCart()">&#x2715;</button></div>
+      <div class="sheet-header"><span class="sheet-title">Your Cart</span><button class="close-btn" type="button" data-close-cart>&#x2715;</button></div>
       <div id="cartItems"></div>
       <div class="total-row"><span>Total</span><span id="cartTotal">&#x20A6;0</span></div>
       <hr class="divider">
@@ -1989,16 +1999,30 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       <div class="sec-title">Payment Details</div>
       <div class="fg"><label>Card Number *</label><input id="cNum" type="tel" placeholder="0000 0000 0000 0000" maxlength="19" oninput="fmtCard(this)"></div>
       <div class="fg addr-row"><div><label>Expiry *</label><input id="cExp" type="tel" placeholder="MM/YY" maxlength="5" oninput="fmtExp(this)"></div><div><label>CVV *</label><input id="cCvv" type="tel" placeholder="CVV" maxlength="4"></div></div>
-      <button class="pay-btn" id="payBtn" onclick="doCheckout()">Pay Now</button>
+      <button class="pay-btn" id="payBtn" type="button" data-checkout>Pay Now</button>
     </div>
   </div>
+  <button class="cart-summary" id="cartSummary" type="button" data-open-cart>
+    <span class="cart-summary-main">
+      <span class="cart-summary-count" id="summaryCount">0 items</span>
+      <span class="cart-summary-total" id="summaryTotal">&#x20A6;0</span>
+    </span>
+    <span class="cart-summary-cta">View Cart</span>
+  </button>
+  <div class="toast" id="toast">Added to cart</div>
   <script>
     var SLUG='CARTY_SLUG',prods=CARTY_PRODS_JSON,cart={},CAN_ORDER=CARTY_CAN_ORDER;
     function N(n){return'\u20A6'+Number(n).toLocaleString()}
     function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
     function fmtCard(el){var v=el.value.replace(/\D/g,'').slice(0,16);el.value=v.replace(/(\d{4})(?=\d)/g,'$1 ');}
     function fmtExp(el){var v=el.value.replace(/\D/g,'');if(v.length>2)v=v.slice(0,2)+'/'+v.slice(2,4);el.value=v;}
-    function add(id){if(!CAN_ORDER){alert('This store is not currently accepting orders.');return;}cart[id]=(cart[id]||0)+1;updateUI();}
+    function showToast(msg){
+      var t=document.getElementById('toast');if(!t)return;
+      t.textContent=msg||'Added to cart';t.classList.add('show');
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer=setTimeout(function(){t.classList.remove('show');},1400);
+    }
+    function add(id){if(!CAN_ORDER){alert('This store is not currently accepting orders.');return;}cart[id]=(cart[id]||0)+1;updateUI();showToast('Added to cart');}
     function inc(id){cart[id]=(cart[id]||0)+1;updateUI();}
     function dec(id){if(cart[id]>1)cart[id]--;else delete cart[id];updateUI();}
     function chQty(id,d){cart[id]=(cart[id]||0)+d;if(cart[id]<=0)delete cart[id];updateUI();}
@@ -2008,6 +2032,13 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       var cb=document.getElementById('cb');
       if(cb){cb.style.display=cnt>0?'flex':'none';cb.textContent=cnt;}
       var te=document.getElementById('cartTotal');if(te)te.textContent=N(tot);
+      document.body.classList.toggle('has-cart',cnt>0);
+      var summary=document.getElementById('cartSummary');
+      if(summary)summary.classList.toggle('open',cnt>0);
+      var sc=document.getElementById('summaryCount');
+      if(sc)sc.textContent=cnt+' item'+(cnt===1?'':'s');
+      var st=document.getElementById('summaryTotal');
+      if(st)st.textContent=N(tot);
       prods.forEach(function(p){
         var card=document.querySelector('[data-pid="'+p.id+'"]');if(!card)return;
         var qty=cart[p.id]||0;
@@ -2024,14 +2055,14 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
         var p=prods.find(function(x){return x.id===id});if(!p)return'';
         return'<div class="ci" data-id="'+id+'">'
           +'<span class="ci-name">'+esc(p.name)+'</span>'
-          +'<button class="qty-btn" data-a="-1">-</button>'
+          +'<button class="qty-btn" type="button" data-cart-qty="'+id+'" data-delta="-1">-</button>'
           +'<span class="qty-n">'+cart[id]+'</span>'
-          +'<button class="qty-btn" data-a="1">+</button>'
+          +'<button class="qty-btn" type="button" data-cart-qty="'+id+'" data-delta="1">+</button>'
           +'<span class="ci-price">'+N(p.price*cart[id])+'</span></div>';
       }).join('');
     }
-    function openCart(){document.getElementById('overlay').classList.add('open');updateUI();}
-    function closeCart(){document.getElementById('overlay').classList.remove('open');}
+    function openCart(){var o=document.getElementById('overlay');if(o)o.classList.add('open');updateUI();}
+    function closeCart(){var o=document.getElementById('overlay');if(o)o.classList.remove('open');}
     function showSuccess(){
       document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f9fafb">'
         +'<div style="background:#fff;border-radius:20px;padding:40px 28px;max-width:380px;width:100%;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.08)">'
@@ -2061,12 +2092,16 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       }catch(e){alert('Error: '+e.message);}
     }
     document.addEventListener('DOMContentLoaded',function(){
-      document.getElementById('overlay').addEventListener('click',function(e){if(e.target===this)closeCart();});
-      document.getElementById('cartItems').addEventListener('click',function(e){
-        var btn=e.target.closest('.qty-btn[data-a]');if(!btn)return;
-        var ci=btn.closest('[data-id]');if(!ci)return;
-        chQty(ci.dataset.id,parseInt(btn.dataset.a));
+      document.addEventListener('click',function(e){
+        var open=e.target.closest('[data-open-cart]');if(open){openCart();return;}
+        var close=e.target.closest('[data-close-cart]');if(close){closeCart();return;}
+        var addBtn=e.target.closest('[data-add]');if(addBtn){add(addBtn.dataset.add);return;}
+        var qty=e.target.closest('[data-qty]');if(qty){chQty(qty.dataset.qty,parseInt(qty.dataset.delta,10));return;}
+        var cartQty=e.target.closest('[data-cart-qty]');if(cartQty){chQty(cartQty.dataset.cartQty,parseInt(cartQty.dataset.delta,10));return;}
+        var checkout=e.target.closest('[data-checkout]');if(checkout){doCheckout();return;}
       });
+      var overlay=document.getElementById('overlay');
+      if(overlay)overlay.addEventListener('click',function(e){if(e.target===this)closeCart();});
     });
     async function doCheckout(){
       var name=document.getElementById('bName').value.trim();
@@ -2122,7 +2157,7 @@ def _build_storefront_html(store: dict, products: list, slug: str, base_url: str
     header_html = (
         f'<div class="header">{logo_html}'
         f'<span class="store-name">{store_name_esc}</span>'
-        f'<button class="cart-btn" onclick="openCart()">&#x1F6D2;'
+        f'<button class="cart-btn" type="button" data-open-cart aria-label="Open cart">&#x1F6D2;'
         f'<span class="cart-badge" id="cb">0</span></button></div>'
     )
     can_accept_orders = store_accepts_payments(store)
@@ -2151,11 +2186,11 @@ def _build_storefront_html(store: dict, products: list, slug: str, base_url: str
                 f'<div class="prod-name">{_h(p.get("name", ""))}</div>'
                 f'<div class="prod-price">&#x20A6;{price_str}</div>'
                 f'{desc_html}</div>'
-                f'<button class="add-btn" onclick="add(\'{pid}\')" {"disabled" if not can_accept_orders else ""}>Add to Cart</button>'
+                f'<button class="add-btn" type="button" data-add="{pid}" {"disabled" if not can_accept_orders else ""}>Add to Cart</button>'
                 f'<div class="card-qty">'
-                f'<button class="qty-btn" onclick="dec(\'{pid}\')">&#8722;</button>'
+                f'<button class="qty-btn" type="button" data-qty="{pid}" data-delta="-1">&#8722;</button>'
                 f'<span class="card-qty-n">1</span>'
-                f'<button class="qty-btn" onclick="inc(\'{pid}\')">&#43;</button>'
+                f'<button class="qty-btn" type="button" data-qty="{pid}" data-delta="1">&#43;</button>'
                 f'</div></div>'
             )
         grid_html = '<div class="grid">' + ''.join(cards) + '</div>'
