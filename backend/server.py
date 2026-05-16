@@ -1907,6 +1907,10 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
   <meta property="og:url" content="CARTY_OG_URL" />
   <meta property="og:image" content="CARTY_OG_IMAGE" />
   <meta property="og:image:secure_url" content="CARTY_OG_IMAGE" />
+  <meta property="og:image:type" content="CARTY_OG_IMAGE_TYPE" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="CARTY_OG_IMAGE_ALT" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="CARTY_STORE_NAME | CartY" />
   <meta name="twitter:description" content="CARTY_OG_DESCRIPTION" />
@@ -2104,10 +2108,11 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>"""
 
-def _build_storefront_html(store: dict, products: list, slug: str, base_url: str = '') -> str:
+def _build_storefront_html(store: dict, products: list, slug: str, base_url: str = '', public_path: str = '') -> str:
     store_name_raw = (store.get('name') or '').strip() or 'Store'
     store_name_esc = _h(store_name_raw)
-    public_url = f"{base_url}/store/{slug}" if base_url else f"/store/{slug}"
+    public_path = public_path or f"/store/{slug}"
+    public_url = f"{base_url}{public_path}" if base_url else public_path
     logo_letter = _h(store_name_raw[0].upper())
     logo_html = (
         f'<img class="logo-img" src="{_h(store["logo"])}" alt="logo">'
@@ -2165,8 +2170,10 @@ def _build_storefront_html(store: dict, products: list, slug: str, base_url: str
     featured_name = (featured_product or {}).get('name') or store_name_raw
     og_description = f"Shop {featured_name} from {store_name_raw} on CartY."
     raw_og_image = (featured_product or {}).get('image') or store.get('logo') or ''
+    og_image_type = 'image/jpeg'
     if _is_data_image(raw_og_image):
-        og_image = f"{base_url}/store/{slug}/preview-image" if base_url else f"/store/{slug}/preview-image"
+        og_image_type = raw_og_image.split(';', 1)[0].replace('data:', '') or 'image/jpeg'
+        og_image = f"{base_url}{public_path}/preview.jpg" if base_url else f"{public_path}/preview.jpg"
     else:
         og_image = _absolute_url(raw_og_image, base_url)
 
@@ -2176,6 +2183,8 @@ def _build_storefront_html(store: dict, products: list, slug: str, base_url: str
         .replace('CARTY_STORE_NAME', store_name_esc)
         .replace('CARTY_OG_DESCRIPTION', _h(og_description))
         .replace('CARTY_OG_URL', _h(public_url))
+        .replace('CARTY_OG_IMAGE_TYPE', _h(og_image_type))
+        .replace('CARTY_OG_IMAGE_ALT', _h(featured_name))
         .replace('CARTY_HEADER_HTML', header_html)
         .replace('CARTY_INACTIVE_BANNER', inactive_banner)
         .replace('CARTY_GRID_HTML', grid_html)
@@ -2243,13 +2252,25 @@ async def storefront_page(slug: str, request: Request):
     products = many(await db(lambda: supabase.table('products').select('*').eq(
         'store_id', store['id']
     ).eq('is_active', True).execute()))
-    html_content = _build_storefront_html(store, products, slug, get_public_base_url(request))
+    html_content = _build_storefront_html(store, products, slug, get_public_base_url(request), f"/store/{slug}")
     return HTMLResponse(html_content,
                         headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 @app.get("/{slug}", response_class=HTMLResponse)
 async def short_storefront_page(slug: str, request: Request):
-    return await storefront_page(slug, request)
+    store = one(await db(lambda: supabase.table('stores').select(
+        'id,name,slug,logo,whatsapp_number,subscription_status,subscription_end_date'
+    ).eq('slug', slug).limit(1).execute()))
+    if not store:
+        return HTMLResponse(_NOT_FOUND_HTML, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    await deactivate_store_if_expired(store)
+    products = many(await db(lambda: supabase.table('products').select('*').eq(
+        'store_id', store['id']
+    ).eq('is_active', True).execute()))
+    html_content = _build_storefront_html(store, products, slug, get_public_base_url(request), f"/{slug}")
+    return HTMLResponse(html_content,
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 @app.get("/store/{slug}/preview-image")
 async def storefront_preview_image(slug: str):
@@ -2265,6 +2286,18 @@ async def storefront_preview_image(slug: str):
     if _is_data_image(image):
         return _data_image_response(image)
     return Response(status_code=404)
+
+@app.get("/store/{slug}/preview.jpg")
+async def storefront_preview_jpg(slug: str):
+    return await storefront_preview_image(slug)
+
+@app.get("/{slug}/preview-image")
+async def short_storefront_preview_image(slug: str):
+    return await storefront_preview_image(slug)
+
+@app.get("/{slug}/preview.jpg")
+async def short_storefront_preview_jpg(slug: str):
+    return await storefront_preview_image(slug)
 
 @app.get("/store/{slug}/payment", response_class=HTMLResponse)
 async def payment_page(slug: str, reference: str = '', trxref: str = ''):
