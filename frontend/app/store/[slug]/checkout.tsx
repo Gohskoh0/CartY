@@ -38,6 +38,7 @@ export default function Checkout() {
   const [buyerPhone, setBuyerPhone] = useState('');
   const [buyerAddress, setBuyerAddress] = useState('');
   const [buyerNote, setBuyerNote] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'card' | 'bank_transfer'>('card');
   const [loading, setLoading] = useState(false);
 
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
@@ -68,6 +69,7 @@ export default function Checkout() {
           product_id: item.product.id,
           quantity: item.quantity,
         })),
+        payment_method: paymentMethod,
       });
 
       if (response.status === 'subscription_required') {
@@ -167,7 +169,9 @@ export default function Checkout() {
           <TouchableOpacity onPress={() => setPaymentUrl(null)}>
             <Ionicons name="close" size={24} color="#111827" />
           </TouchableOpacity>
-          <Text style={styles.webviewTitle}>Complete Payment</Text>
+          <Text style={styles.webviewTitle}>
+            {paymentMethod === 'bank_transfer' ? 'Complete Bank Transfer' : 'Complete Payment'}
+          </Text>
           <View style={{ width: 24 }} />
         </View>
         <WebView
@@ -269,6 +273,56 @@ export default function Checkout() {
               textAlignVertical="top"
             />
           </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Payment Method</Text>
+
+            <View style={styles.paymentMethods}>
+              <TouchableOpacity
+                style={[
+                  styles.paymentMethodButton,
+                  paymentMethod === 'card' && styles.paymentMethodButtonActive,
+                ]}
+                onPress={() => setPaymentMethod('card')}
+                activeOpacity={0.85}
+              >
+                <Ionicons
+                  name="card-outline"
+                  size={22}
+                  color={paymentMethod === 'card' ? '#4F46E5' : '#6B7280'}
+                />
+                <View style={styles.paymentMethodCopy}>
+                  <Text style={styles.paymentMethodTitle}>Card</Text>
+                  <Text style={styles.paymentMethodText}>Pay securely with your debit card</Text>
+                </View>
+                {paymentMethod === 'card' && (
+                  <Ionicons name="checkmark-circle" size={20} color="#4F46E5" />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.paymentMethodButton,
+                  paymentMethod === 'bank_transfer' && styles.paymentMethodButtonActive,
+                ]}
+                onPress={() => setPaymentMethod('bank_transfer')}
+                activeOpacity={0.85}
+              >
+                <Ionicons
+                  name="business-outline"
+                  size={22}
+                  color={paymentMethod === 'bank_transfer' ? '#4F46E5' : '#6B7280'}
+                />
+                <View style={styles.paymentMethodCopy}>
+                  <Text style={styles.paymentMethodTitle}>Bank Transfer</Text>
+                  <Text style={styles.paymentMethodText}>Pay into a Paystack-generated account</Text>
+                </View>
+                {paymentMethod === 'bank_transfer' && (
+                  <Ionicons name="checkmark-circle" size={20} color="#4F46E5" />
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
         </ScrollView>
 
         <View style={styles.footer}>
@@ -281,8 +335,16 @@ export default function Checkout() {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <>
-                <Text style={styles.payButtonText}>Pay ₦{cartTotal.toLocaleString()}</Text>
-                <Ionicons name="lock-closed" size={20} color="#FFFFFF" />
+                <Text style={styles.payButtonText}>
+                  {paymentMethod === 'bank_transfer'
+                    ? 'Continue to Bank Transfer'
+                    : `Pay ₦${cartTotal.toLocaleString()}`}
+                </Text>
+                <Ionicons
+                  name={paymentMethod === 'bank_transfer' ? 'arrow-forward' : 'lock-closed'}
+                  size={20}
+                  color="#FFFFFF"
+                />
               </>
             )}
           </TouchableOpacity>
@@ -379,6 +441,36 @@ const styles = StyleSheet.create({
     height: 80,
     paddingTop: 14,
   },
+  paymentMethods: {
+    gap: 12,
+  },
+  paymentMethodButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 14,
+  },
+  paymentMethodButtonActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#4F46E5',
+  },
+  paymentMethodCopy: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  paymentMethodTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  paymentMethodText: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
   footer: {
     padding: 16,
     backgroundColor: '#FFFFFF',
@@ -401,6 +493,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     marginRight: 8,
+    flexShrink: 1,
+    textAlign: 'center',
   },
   webviewHeader: {
     flexDirection: 'row',
@@ -466,4 +560,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

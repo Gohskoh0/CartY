@@ -160,6 +160,7 @@ class CheckoutRequest(BaseModel):
     buyer_address: str
     buyer_note: Optional[str] = None
     cart_items: List[CartItem]
+    payment_method: Optional[str] = None
 
 class WithdrawalRequest(BaseModel):
     amount: float
@@ -1256,9 +1257,10 @@ async def checkout(slug: str, data: CheckoutRequest, background_tasks: Backgroun
     if not store_accepts_payments(store):
         return {"status": "subscription_required", "message": "This store is not accepting payments.", "whatsapp_link": f"https://wa.me/{store.get('whatsapp_number','')}"}
 
+    payment_method = (data.payment_method or '').strip().lower()
     total_amount, order_items = 0, []
     for item in data.cart_items:
-        product = one(await db(lambda: supabase.table('products').select('*').eq('id', item.product_id).eq('is_active', True).limit(1).execute()))
+        product = one(await db(lambda: supabase.table('products').select('*').eq('store_id', store['id']).eq('id', item.product_id).eq('is_active', True).limit(1).execute()))
         if not product:
             raise HTTPException(status_code=400, detail=f"Product not found: {item.product_id}")
         item_total = product["price"] * item.quantity
@@ -1275,15 +1277,30 @@ async def checkout(slug: str, data: CheckoutRequest, background_tasks: Backgroun
 
     try:
         async with httpx.AsyncClient() as client:
+            customer_email_key = re.sub(r'[^0-9A-Za-z]', '', data.buyer_phone) or reference
+            payload = {
+                "email": f"{customer_email_key}@carty.store",
+                "amount": int(total_amount * 100),
+                "reference": reference,
+                "callback_url": f"{get_public_base_url(request)}/store/{slug}/payment",
+                "metadata": json.dumps({
+                    "order_id": order_id,
+                    "store_slug": slug,
+                    "payment_method": payment_method or "paystack",
+                }, separators=(',', ':')),
+            }
+            if payment_method in ("bank_transfer", "transfer"):
+                payload["channels"] = ["bank_transfer"]
+            elif payment_method == "card":
+                payload["channels"] = ["card"]
             resp = await client.post(
                 "https://api.paystack.co/transaction/initialize",
                 headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
-                json={"email": f"{data.buyer_phone}@carty.store", "amount": int(total_amount * 100), "reference": reference,
-                      "callback_url": f"{get_public_base_url(request)}/store/{slug}/payment"}
+                json=payload
             )
             pdata = resp.json()
             if not pdata.get("status"):
-                raise HTTPException(status_code=500, detail="Payment initialization failed")
+                raise HTTPException(status_code=500, detail=pdata.get("message") or "Payment initialization failed")
             return {"status": "success", "authorization_url": pdata["data"]["authorization_url"], "reference": reference, "order_id": order_id, "total": total_amount}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail="Payment service unavailable")
@@ -1343,7 +1360,7 @@ async def storefront_charge_card(slug: str, data: StorefrontCardChargeRequest, b
         return {"status": "subscription_required", "message": "This store is not accepting payments.", "whatsapp_link": f"https://wa.me/{store.get('whatsapp_number','')}"}
     total_amount, order_items = 0, []
     for item in data.cart_items:
-        product = one(await db(lambda: supabase.table('products').select('*').eq('id', item.product_id).eq('is_active', True).limit(1).execute()))
+        product = one(await db(lambda: supabase.table('products').select('*').eq('store_id', store['id']).eq('id', item.product_id).eq('is_active', True).limit(1).execute()))
         if not product:
             raise HTTPException(status_code=400, detail=f"Product not found: {item.product_id}")
         item_total = product["price"] * item.quantity
@@ -1979,6 +1996,11 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     input,textarea{width:100%;padding:11px 13px;border:1.5px solid #E5E7EB;border-radius:10px;font-size:15px;color:#111827;background:#F9FAFB;outline:none;font-family:inherit}
     input:focus,textarea:focus{border-color:#4F46E5;background:#fff}
     textarea{resize:none}
+    .method-tabs{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}
+    .method-option{border:1.5px solid #E5E7EB;background:#fff;color:#374151;border-radius:12px;padding:11px 10px;font-size:14px;font-weight:800;cursor:pointer}
+    .method-option.active{border-color:#4F46E5;background:#EEF2FF;color:#3730A3}
+    .method-note{background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;color:#475569;font-size:13px;line-height:1.45;padding:12px;margin-bottom:10px}
+    .method-note[hidden],.card-fields[hidden]{display:none}
     .pay-btn{width:100%;padding:15px;background:#4F46E5;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-top:6px}
     .pay-btn:disabled{background:#A5B4FC;cursor:not-allowed}
     .pay-btn:active{background:#4338CA}
@@ -2005,10 +2027,17 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       <div class="fg addr-row"><div><label>ZIP / Postal Code *</label><input id="bZip" type="text" placeholder="ZIP code"></div><div><label>Country *</label><input id="bCountry" type="text" placeholder="Country"></div></div>
       <div class="fg"><label>Note (optional)</label><input id="bNote" type="text" placeholder="Any special instructions?"></div>
       <hr class="divider">
-      <div class="sec-title">Payment Details</div>
-      <div class="fg"><label>Card Number *</label><input id="cNum" type="tel" placeholder="0000 0000 0000 0000" maxlength="19" oninput="fmtCard(this)"></div>
-      <div class="fg addr-row"><div><label>Expiry *</label><input id="cExp" type="tel" placeholder="MM/YY" maxlength="5" oninput="fmtExp(this)"></div><div><label>CVV *</label><input id="cCvv" type="tel" placeholder="CVV" maxlength="4"></div></div>
-      <button class="pay-btn" id="payBtn" type="button" data-checkout>Pay Now</button>
+      <div class="sec-title">Payment Method</div>
+      <div class="method-tabs" role="group" aria-label="Payment method">
+        <button class="method-option active" type="button" data-payment-method="card">Card</button>
+        <button class="method-option" type="button" data-payment-method="bank_transfer">Bank Transfer</button>
+      </div>
+      <div id="cardFields" class="card-fields">
+        <div class="fg"><label>Card Number *</label><input id="cNum" type="tel" placeholder="0000 0000 0000 0000" maxlength="19" oninput="fmtCard(this)"></div>
+        <div class="fg addr-row"><div><label>Expiry *</label><input id="cExp" type="tel" placeholder="MM/YY" maxlength="5" oninput="fmtExp(this)"></div><div><label>CVV *</label><input id="cCvv" type="tel" placeholder="CVV" maxlength="4"></div></div>
+      </div>
+      <div id="transferNote" class="method-note" hidden>Paystack will generate a secure bank account for this order on the next screen. Complete the transfer there and CartY will confirm the payment automatically.</div>
+      <button class="pay-btn" id="payBtn" type="button" data-checkout>Pay with Card</button>
     </div>
   </div>
   <button class="cart-summary" id="cartSummary" type="button" data-open-cart>
@@ -2020,7 +2049,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
   </button>
   <div class="toast" id="toast">Added to cart</div>
   <script>
-    var SLUG='CARTY_SLUG',prods=CARTY_PRODS_JSON,cart={},CAN_ORDER=CARTY_CAN_ORDER;
+    var SLUG='CARTY_SLUG',prods=CARTY_PRODS_JSON,cart={},CAN_ORDER=CARTY_CAN_ORDER,PAY_METHOD='card';
     function N(n){return'\u20A6'+Number(n).toLocaleString()}
     function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
     function fmtCard(el){var v=el.value.replace(/\D/g,'').slice(0,16);el.value=v.replace(/(\d{4})(?=\d)/g,'$1 ');}
@@ -2072,6 +2101,18 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
     }
     function openCart(){var o=document.getElementById('overlay');if(o)o.classList.add('open');updateUI();}
     function closeCart(){var o=document.getElementById('overlay');if(o)o.classList.remove('open');}
+    function setPaymentMethod(method){
+      PAY_METHOD=method==='bank_transfer'?'bank_transfer':'card';
+      document.querySelectorAll('[data-payment-method]').forEach(function(btn){
+        btn.classList.toggle('active',btn.dataset.paymentMethod===PAY_METHOD);
+      });
+      var cardFields=document.getElementById('cardFields');
+      var transferNote=document.getElementById('transferNote');
+      if(cardFields)cardFields.hidden=PAY_METHOD!=='card';
+      if(transferNote)transferNote.hidden=PAY_METHOD!=='bank_transfer';
+      var payBtn=document.getElementById('payBtn');
+      if(payBtn)payBtn.textContent=PAY_METHOD==='bank_transfer'?'Continue to Bank Transfer':'Pay with Card';
+    }
     function showSuccess(){
       document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f9fafb">'
         +'<div style="background:#fff;border-radius:20px;padding:40px 28px;max-width:380px;width:100%;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.08)">'
@@ -2108,6 +2149,7 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
         var qty=e.target.closest('[data-qty]');if(qty){chQty(qty.dataset.qty,parseInt(qty.dataset.delta,10));return;}
         var cartQty=e.target.closest('[data-cart-qty]');if(cartQty){chQty(cartQty.dataset.cartQty,parseInt(cartQty.dataset.delta,10));return;}
         var otp=e.target.closest('[data-submit-otp]');if(otp){submitOtp(otp.dataset.ref,otp.dataset.orderId);return;}
+        var method=e.target.closest('[data-payment-method]');if(method){setPaymentMethod(method.dataset.paymentMethod);return;}
         var checkout=e.target.closest('[data-checkout]');if(checkout){doCheckout();return;}
       });
       var overlay=document.getElementById('overlay');
@@ -2122,32 +2164,45 @@ _STOREFRONT_TEMPLATE = """<!DOCTYPE html>
       var zip=document.getElementById('bZip').value.trim();
       var country=document.getElementById('bCountry').value.trim();
       var note=document.getElementById('bNote').value.trim();
-      var cardNum=document.getElementById('cNum').value.replace(/\s/g,'');
-      var expRaw=document.getElementById('cExp').value;
-      var cvv=document.getElementById('cCvv').value.trim();
-      var expParts=expRaw.split('/');
-      var expM=(expParts[0]||'').trim();
-      var expY=(expParts[1]||'').trim();
-      var expYFull=expY.length===2?'20'+expY:expY;
       if(!name||!phone||!street||!city||!state||!zip||!country){alert('Please fill in all delivery details');return;}
-      if(cardNum.length<15||!expM||expY.length<2||cvv.length<3){alert('Please fill in all payment details');return;}
       if(!Object.keys(cart).length){alert('Your cart is empty');return;}
       var btn=document.getElementById('payBtn');btn.disabled=true;btn.textContent='Processing...';
       var addr=street+', '+city+', '+state+' '+zip+', '+country;
       try{
         var items=Object.keys(cart).map(function(id){return{product_id:id,quantity:cart[id]}});
+        if(PAY_METHOD==='bank_transfer'){
+          btn.textContent='Opening Paystack...';
+          var br=await fetch('/api/storefront/'+SLUG+'/checkout',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({buyer_name:name,buyer_phone:phone,buyer_address:addr,buyer_note:note||undefined,cart_items:items,payment_method:'bank_transfer'})
+          });
+          var bd=await br.json();
+          if(bd.status==='subscription_required'){alert('This store is not accepting payments. Contact seller via WhatsApp.');btn.disabled=false;setPaymentMethod(PAY_METHOD);return;}
+          if(!br.ok){throw new Error(bd.detail||bd.message||'Could not start bank transfer');}
+          if(bd.authorization_url){window.location.href=bd.authorization_url;return;}
+          throw new Error(bd.message||'Could not start bank transfer');
+        }
+        var cardNum=document.getElementById('cNum').value.replace(/\s/g,'');
+        var expRaw=document.getElementById('cExp').value;
+        var cvv=document.getElementById('cCvv').value.trim();
+        var expParts=expRaw.split('/');
+        var expM=(expParts[0]||'').trim();
+        var expY=(expParts[1]||'').trim();
+        var expYFull=expY.length===2?'20'+expY:expY;
+        if(cardNum.length<15||!expM||expY.length<2||cvv.length<3){alert('Please fill in all payment details');btn.disabled=false;setPaymentMethod(PAY_METHOD);return;}
         var r=await fetch('/api/storefront/'+SLUG+'/charge-card',{
           method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({buyer_name:name,buyer_phone:phone,buyer_address:addr,buyer_note:note||undefined,cart_items:items,card_number:cardNum,expiry_month:expM,expiry_year:expYFull,cvv:cvv})
         });
         var d=await r.json();
-        if(d.status==='subscription_required'){alert('This store is not accepting payments. Contact seller via WhatsApp.');btn.disabled=false;btn.textContent='Pay Now';return;}
+        if(d.status==='subscription_required'){alert('This store is not accepting payments. Contact seller via WhatsApp.');btn.disabled=false;setPaymentMethod(PAY_METHOD);return;}
         if(d.status==='success'){showSuccess();return;}
-        if(d.status==='send_otp'||d.status==='send_pin'||d.status==='send_phone'){showOtp(d.reference,d.order_id,d.display_text||'Enter the OTP sent to you');btn.disabled=false;btn.textContent='Pay Now';return;}
+        if(d.status==='send_otp'||d.status==='send_pin'||d.status==='send_phone'){showOtp(d.reference,d.order_id,d.display_text||'Enter the OTP sent to you');btn.disabled=false;setPaymentMethod(PAY_METHOD);return;}
         if(d.status==='open_url'){window.location.href=d.url;return;}
         throw new Error(d.message||'Payment failed');
-      }catch(e){alert('Error: '+e.message);btn.disabled=false;btn.textContent='Pay Now';}
+      }catch(e){alert('Error: '+e.message);btn.disabled=false;setPaymentMethod(PAY_METHOD);}
     }
+    setPaymentMethod('card');
     updateUI();
   </script>
 </body>

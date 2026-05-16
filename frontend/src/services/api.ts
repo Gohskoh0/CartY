@@ -230,6 +230,7 @@ class ApiService {
     buyer_address: string;
     buyer_note?: string;
     cart_items: { product_id: string; quantity: number }[];
+    payment_method?: 'card' | 'bank_transfer';
   }) {
     return this.request(`/storefront/${slug}/checkout`, {
       method: 'POST',
