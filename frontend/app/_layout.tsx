@@ -114,7 +114,7 @@ function NotificationSetup() {
     return () => {
       responseListener.current?.remove();
     };
-  }, [user]);
+  }, [user, router]);
 
   return null;
 }

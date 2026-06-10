@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Image } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../src/context/AuthContext';
 
@@ -19,7 +19,7 @@ export default function Index() {
         router.replace('/(auth)/login');
       }
     }
-  }, [isLoading, user]);
+  }, [isLoading, user, router]);
 
   return (
     <View style={styles.container}>

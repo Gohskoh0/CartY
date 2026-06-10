@@ -165,12 +165,6 @@ class CheckoutRequest(BaseModel):
 class WithdrawalRequest(BaseModel):
     amount: float
 
-class TransferRequest(BaseModel):
-    bank_code: str
-    account_number: str
-    bank_name: str
-    amount: float
-
 class SubscribeRequest(BaseModel):
     email: str
 
@@ -618,7 +612,7 @@ CartY features you can explain:
 - Product management (add, edit, delete products with photos and prices)
 - Shareable storefront link customers can browse and purchase from
 - Paystack payment processing (cards, bank transfer)
-- Wallet: receive earnings, link bank account, withdraw funds
+- Wallet: receive earnings, link bank account, request manual withdrawals
 - Subscription: $7/month to accept online payments
 - Phone OTP verification and account security
 - Multi-country support across Africa and beyond
@@ -1625,7 +1619,9 @@ async def get_wallet(user=Depends(get_current_user)):
         "pending_balance": store.get("pending_balance", 0),
         "total_earnings": store.get("total_earnings", 0),
         "bank_name": store.get("bank_name"),
+        "bank_code": store.get("bank_code"),
         "bank_account_number": store.get("bank_account_number"),
+        "bank_account_name": store.get("bank_account_name"),
         "withdrawals": withdrawals
     }
 
@@ -1645,47 +1641,6 @@ async def get_banks(country: str = "NG"):
     except Exception as e:
         logger.error(f"Banks fetch error: {e}")
         return []
-
-def paystack_error_message(data: dict, fallback: str) -> str:
-    if isinstance(data, dict):
-        if data.get("message"):
-            return str(data["message"])
-        nested = data.get("data")
-        if isinstance(nested, dict):
-            return str(nested.get("message") or nested.get("gateway_response") or fallback)
-    return fallback
-
-def paystack_payout_blocked_message(message: str) -> Optional[str]:
-    lowered = (message or "").lower()
-    if "starter business" in lowered or "third party payout" in lowered or "third-party payout" in lowered:
-        return (
-            "Paystack blocked this payout because this Paystack account is a Starter Business. "
-            "Upgrade/register the Paystack business and enable Transfers before seller withdrawals can be sent. "
-            "No wallet funds were deducted."
-        )
-    return None
-
-def ensure_paystack_transfer_accepted(data: dict, fallback: str) -> dict:
-    message = paystack_error_message(data, fallback)
-    blocked_message = paystack_payout_blocked_message(message)
-    if blocked_message:
-        raise HTTPException(status_code=403, detail=blocked_message)
-    if not data.get("status"):
-        raise HTTPException(status_code=400, detail=f"{message}. No wallet funds were deducted.")
-    transfer = data.get("data") or {}
-    transfer_status = str(transfer.get("status") or "pending").lower()
-    if transfer_status == "otp":
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Paystack requires a transfer OTP before this payout can be sent. "
-                "Disable Transfers OTP in Paystack or add OTP finalization before retrying. "
-                "No wallet funds were deducted."
-            ),
-        )
-    if transfer_status in {"failed", "reversed"}:
-        raise HTTPException(status_code=400, detail=f"{message}. No wallet funds were deducted.")
-    return transfer
 
 @api_router.get("/wallet/verify-account")
 async def verify_bank_account(bank_code: str = "", account_number: str = "", user=Depends(get_current_user)):
@@ -1708,6 +1663,8 @@ async def setup_bank_account(user=Depends(get_current_user), bank_code: str = ""
     store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
+    if not bank_code or not account_number or not bank_name:
+        raise HTTPException(status_code=400, detail="bank_code, account_number, and bank_name are required")
     try:
         async with httpx.AsyncClient() as client:
             vr = await client.get(f"https://api.paystack.co/bank/resolve?account_number={account_number}&bank_code={bank_code}", headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"})
@@ -1716,17 +1673,9 @@ async def setup_bank_account(user=Depends(get_current_user), bank_code: str = ""
                 raise HTTPException(status_code=400, detail="Invalid account number")
             account_name = vdata["data"]["account_name"]
 
-            rr = await client.post("https://api.paystack.co/transferrecipient",
-                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
-                json={"type": "nuban", "name": account_name, "account_number": account_number, "bank_code": bank_code, "currency": "NGN"})
-            rdata = rr.json()
-            if not rdata.get("status"):
-                raise HTTPException(status_code=400, detail="Failed to setup bank account")
-
         await db(lambda: supabase.table('stores').update({
             "bank_name": bank_name, "bank_code": bank_code,
-            "bank_account_number": account_number, "bank_account_name": account_name,
-            "recipient_code": rdata["data"]["recipient_code"]
+            "bank_account_number": account_number, "bank_account_name": account_name
         }).eq('id', store['id']).execute())
         return {"status": "success", "account_name": account_name, "bank_name": bank_name, "account_number": account_number}
     except HTTPException:
@@ -1739,37 +1688,41 @@ async def request_withdrawal(data: WithdrawalRequest, user=Depends(get_current_u
     store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
     if not store:
         raise HTTPException(status_code=404, detail="Store not found")
-    if not store.get("recipient_code"):
+    if not store.get("bank_account_number"):
         raise HTTPException(status_code=400, detail="Please setup your bank account first")
-    if data.amount > store.get("wallet_balance", 0):
+    wallet_balance = store.get("wallet_balance", 0) or 0
+    if data.amount > wallet_balance:
         raise HTTPException(status_code=400, detail="Insufficient balance")
     if data.amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdrawal is ₦100")
 
     reference = f"wd_{uuid.uuid4().hex[:24]}"
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post("https://api.paystack.co/transfer",
-                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
-                json={"source": "balance", "amount": int(data.amount * 100), "recipient": store["recipient_code"], "reason": "CartY Withdrawal", "reference": reference})
-            tdata = resp.json()
+        await db(lambda: supabase.table('withdrawals').insert({
+            "store_id": store['id'],
+            "amount": data.amount,
+            "reference": reference,
+            "status": "pending",
+            "bank_name": store.get("bank_name"),
+            "bank_code": store.get("bank_code"),
+            "bank_account_number": store.get("bank_account_number"),
+            "bank_account_name": store.get("bank_account_name"),
+        }).execute())
+        await db(lambda: supabase.table('stores').update({"wallet_balance": wallet_balance - data.amount}).eq('id', store['id']).execute())
 
-        ensure_paystack_transfer_accepted(tdata, "Withdrawal failed")
-        await db(lambda: supabase.table('withdrawals').insert({"store_id": store['id'], "amount": data.amount, "reference": reference, "status": "pending"}).execute())
-
-        if tdata.get("status"):
-            await db(lambda: supabase.table('stores').update({"wallet_balance": store["wallet_balance"] - data.amount}).eq('id', store['id']).execute())
-            token = user.get('push_token')
-            if token:
-                asyncio.create_task(send_push_notification(token, "Withdrawal Processing", f"₦{data.amount:,.0f} withdrawal is on its way to your bank.", {"screen": "wallet"}))
-            return {"status": "success", "message": "Withdrawal initiated", "reference": reference}
-        else:
-            await db(lambda: supabase.table('withdrawals').update({"status": "failed"}).eq('reference', reference).execute())
-            raise HTTPException(status_code=500, detail="Withdrawal failed")
+        token = user.get('push_token')
+        if token:
+            asyncio.create_task(send_push_notification(token, "Withdrawal Request Received", f"₦{data.amount:,.0f} withdrawal is pending manual processing.", {"screen": "wallet"}))
+        return {
+            "status": "success",
+            "message": "Withdrawal request submitted for manual processing",
+            "reference": reference
+        }
     except HTTPException:
         raise
-    except httpx.HTTPError:
-        raise HTTPException(status_code=500, detail="Withdrawal service unavailable")
+    except Exception as e:
+        logger.error(f"Withdrawal request error: {e}")
+        raise HTTPException(status_code=500, detail="Could not create withdrawal request")
 
 
 @api_router.post("/wallet/unlink-bank")
@@ -1780,67 +1733,9 @@ async def unlink_bank(user=Depends(get_current_user)):
     await db(lambda: supabase.table('stores').update({
         "bank_name": None, "bank_code": None,
         "bank_account_number": None, "bank_account_name": None,
-        "recipient_code": None
+        "bank_recipient_code": None
     }).eq('id', store['id']).execute())
     return {"status": "success"}
-
-@api_router.post("/wallet/transfer")
-async def transfer_to_bank(data: TransferRequest, user=Depends(get_current_user)):
-    store = one(await db(lambda: supabase.table('stores').select('*').eq('user_id', user['id']).limit(1).execute()))
-    if not store:
-        raise HTTPException(status_code=404, detail="Store not found")
-    if data.amount > store.get("wallet_balance", 0):
-        raise HTTPException(status_code=400, detail="Insufficient balance")
-    if data.amount < 100:
-        raise HTTPException(status_code=400, detail="Minimum transfer is ₦100")
-
-    reference = f"tr_{uuid.uuid4().hex[:24]}"
-    try:
-        async with httpx.AsyncClient() as client:
-            # Verify account
-            vr = await client.get(
-                f"https://api.paystack.co/bank/resolve?account_number={data.account_number}&bank_code={data.bank_code}",
-                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}"})
-            vdata = vr.json()
-            if not vdata.get("status"):
-                raise HTTPException(status_code=400, detail="Invalid account number or bank")
-            account_name = vdata["data"]["account_name"]
-
-            # Create transfer recipient
-            rr = await client.post("https://api.paystack.co/transferrecipient",
-                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
-                json={"type": "nuban", "name": account_name, "account_number": data.account_number,
-                      "bank_code": data.bank_code, "currency": "NGN"})
-            rdata = rr.json()
-            if not rdata.get("status"):
-                raise HTTPException(status_code=400, detail="Failed to create transfer recipient")
-            recipient_code = rdata["data"]["recipient_code"]
-
-            # Initiate transfer
-            tr = await client.post("https://api.paystack.co/transfer",
-                headers={"Authorization": f"Bearer {PAYSTACK_SECRET_KEY}", "Content-Type": "application/json"},
-                json={"source": "balance", "amount": int(data.amount * 100), "recipient": recipient_code,
-                      "reason": f"CartY Transfer to {account_name}", "reference": reference})
-            tdata = tr.json()
-
-        ensure_paystack_transfer_accepted(tdata, "Transfer failed")
-        await db(lambda: supabase.table('withdrawals').insert({
-            "store_id": store['id'], "amount": data.amount,
-            "reference": reference, "status": "pending"
-        }).execute())
-
-        if tdata.get("status"):
-            await db(lambda: supabase.table('stores').update({
-                "wallet_balance": store["wallet_balance"] - data.amount
-            }).eq('id', store['id']).execute())
-            return {"status": "success", "account_name": account_name, "reference": reference}
-        else:
-            await db(lambda: supabase.table('withdrawals').update({"status": "failed"}).eq('reference', reference).execute())
-            raise HTTPException(status_code=500, detail=tdata.get("message") or "Transfer failed")
-    except HTTPException:
-        raise
-    except httpx.HTTPError:
-        raise HTTPException(status_code=500, detail="Transfer service unavailable")
 
 
 # ================== ORDERS ==================
@@ -1897,27 +1792,6 @@ async def paystack_webhook(request: Request):
             campaign = one(await db(lambda: supabase.table('ad_campaigns').select('*').eq('payment_reference', ref).limit(1).execute()))
             if campaign and campaign.get('status') == 'draft':
                 await _finalize_ad_payment(campaign['id'], ref)
-
-    elif event == "transfer.success":
-        ref = data["data"].get("reference", "")
-        w = one(await db(lambda: supabase.table('withdrawals').select('*').eq('reference', ref).limit(1).execute()))
-        await db(lambda: supabase.table('withdrawals').update({"status": "success", "completed_at": datetime.utcnow().isoformat()}).eq('reference', ref).execute())
-        if w:
-            token = await get_store_push_token(w['store_id'])
-            if token:
-                asyncio.create_task(send_push_notification(token, "Withdrawal Successful!", f"₦{w['amount']:,.0f} has been sent to your bank.", {"screen": "wallet"}))
-
-    elif event == "transfer.failed":
-        ref = data["data"].get("reference", "")
-        w = one(await db(lambda: supabase.table('withdrawals').select('*').eq('reference', ref).limit(1).execute()))
-        if w:
-            cur = one(await db(lambda: supabase.table('stores').select('wallet_balance').eq('id', w['store_id']).limit(1).execute()))
-            if cur:
-                await db(lambda: supabase.table('stores').update({"wallet_balance": (cur['wallet_balance'] or 0) + w['amount']}).eq('id', w['store_id']).execute())
-            await db(lambda: supabase.table('withdrawals').update({"status": "failed"}).eq('reference', ref).execute())
-            token = await get_store_push_token(w['store_id'])
-            if token:
-                asyncio.create_task(send_push_notification(token, "Withdrawal Failed", f"₦{w['amount']:,.0f} withdrawal failed. Funds returned to wallet.", {"screen": "wallet"}))
 
     return {"status": "ok"}
 

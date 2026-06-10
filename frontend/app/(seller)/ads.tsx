@@ -10,7 +10,7 @@ export default function Ads() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.content}>
-        <View style={[styles.iconWrap, { backgroundColor: colors.card }]}>
+        <View style={[styles.iconWrap, { backgroundColor: colors.surface }]}>
           <Ionicons name="megaphone-outline" size={48} color="#4F46E5" />
         </View>
         <Text style={[styles.title, { color: colors.text }]}>Ads</Text>
@@ -19,7 +19,7 @@ export default function Ads() {
         </View>
         <Text style={[styles.description, { color: colors.textSecondary }]}>
           Run targeted ads on Meta (Facebook & Instagram) and TikTok directly from CartY.
-          We're putting the finishing touches on this feature.
+          We&apos;re putting the finishing touches on this feature.
         </Text>
         <Text style={[styles.hint, { color: colors.textSecondary }]}>
           Stay tuned for updates.

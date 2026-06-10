@@ -7,6 +7,7 @@ import {
   LayoutDashboard, Users, Store, ShoppingBag, TrendingUp,
   CreditCard, Megaphone, Settings, LogOut, ChevronLeft,
   ChevronRight, ShieldCheck, Zap,
+  Activity,
 } from 'lucide-react';
 import { useState } from 'react';
 import clsx from 'clsx';
@@ -17,6 +18,7 @@ const NAV = [
   { href: '/dashboard/stores', icon: Store, label: 'Stores', color: 'text-violet-400' },
   { href: '/dashboard/orders', icon: ShoppingBag, label: 'Orders', color: 'text-emerald-400' },
   { href: '/dashboard/revenue', icon: TrendingUp, label: 'Revenue', color: 'text-amber-400' },
+  { href: '/dashboard/activity', icon: Activity, label: 'Activity', color: 'text-orange-400' },
   { href: '/dashboard/subscriptions', icon: CreditCard, label: 'Subscriptions', color: 'text-rose-400' },
   { href: '/dashboard/ads', icon: Megaphone, label: 'Ad Campaigns', color: 'text-sky-400' },
   { href: '/dashboard/config', icon: Settings, label: 'App Config', color: 'text-slate-400' },

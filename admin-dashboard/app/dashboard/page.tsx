@@ -31,7 +31,7 @@ export default function OverviewPage() {
     );
   }
 
-  const { stats, trend, recentOrders, activityFeed, userGrowth } = data;
+  const { stats, trend, recentOrders, activityFeed, userGrowth, financials, sellerActivity } = data;
 
   const subDistribution = [
     { name: 'Active', value: stats.activeSubscriptions },
@@ -53,6 +53,24 @@ export default function OverviewPage() {
           <StatCard title="Sub Revenue"       value={`₦${stats.subscriptionRevenue.toLocaleString()}`}   icon={<Wallet className="w-5 h-5" />}     color="rose"   delay={0.25} />
           <StatCard title="Ad Campaigns"      value={stats.totalAdCampaigns}     icon={<Megaphone className="w-5 h-5" />} color="sky"    delay={0.3}  />
           <StatCard title="Total Withdrawn"   value={`₦${stats.totalWithdrawn.toLocaleString()}`}        icon={<Activity className="w-5 h-5" />}   color="violet" delay={0.35} />
+        </div>
+
+        {/* Platform financials */}
+        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
+          {[
+            { label: 'Monthly App Revenue', value: `₦${financials.monthly.appRevenue.toLocaleString()}`, sub: `${financials.monthly.orders} paid orders`, color: 'border-emerald-500/20 bg-emerald-500/5' },
+            { label: 'Quarterly App Revenue', value: `₦${financials.quarterly.appRevenue.toLocaleString()}`, sub: 'subscription + ad margin', color: 'border-indigo-500/20 bg-indigo-500/5' },
+            { label: 'Yearly App Revenue', value: `₦${financials.yearly.appRevenue.toLocaleString()}`, sub: 'projected subscriptions + ads', color: 'border-violet-500/20 bg-violet-500/5' },
+            { label: 'Monthly Seller Sales', value: `₦${financials.monthly.sales.toLocaleString()}`, sub: 'paid/completed GMV', color: 'border-amber-500/20 bg-amber-500/5' },
+            { label: 'Seller Wallets', value: `₦${financials.wallets.totalWalletBalance.toLocaleString()}`, sub: 'available balances', color: 'border-sky-500/20 bg-sky-500/5' },
+            { label: 'Pending Withdrawals', value: financials.withdrawals.pending, sub: `₦${financials.withdrawals.pendingAmount.toLocaleString()} requested`, color: 'border-rose-500/20 bg-rose-500/5' },
+          ].map((item) => (
+            <div key={item.label} className={`glass rounded-2xl p-4 border ${item.color}`}>
+              <p className="text-[11px] text-slate-500 uppercase tracking-wider font-semibold mb-2">{item.label}</p>
+              <p className="text-xl font-bold text-slate-100">{item.value}</p>
+              <p className="text-xs text-slate-600 mt-1">{item.sub}</p>
+            </div>
+          ))}
         </div>
 
         {/* Charts row 1 */}
@@ -138,7 +156,14 @@ export default function OverviewPage() {
             <h3 className="font-semibold text-slate-200 mb-4">Activity Feed</h3>
             <div className="space-y-3">
               {activityFeed.slice(0, 9).map((event: any, i: number) => {
-                const dots: Record<string, string> = { order: 'bg-emerald-500', user: 'bg-sky-500', sub: 'bg-indigo-500' };
+                const dots: Record<string, string> = {
+                  order: 'bg-emerald-500',
+                  user: 'bg-sky-500',
+                  sub: 'bg-indigo-500',
+                  store: 'bg-violet-500',
+                  product: 'bg-amber-500',
+                  withdrawal: 'bg-rose-500',
+                };
                 return (
                   <div key={i} className="flex items-start gap-3">
                     <div className="mt-2 shrink-0">
@@ -155,6 +180,46 @@ export default function OverviewPage() {
                 );
               })}
             </div>
+          </div>
+        </div>
+
+        {/* Seller activity */}
+        <div className="glass rounded-2xl p-5 border border-white/5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-slate-200">Seller Activity</h3>
+              <p className="text-xs text-slate-500">Top stores by recent sales, products, wallet balance, and withdrawals</p>
+            </div>
+            <a href="/dashboard/stores" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">View stores →</a>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/5">
+                  {['Store', '30d Sales', 'Orders', 'Products', 'Wallet', 'Withdrawals', 'Last Order'].map(h => (
+                    <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(sellerActivity ?? []).slice(0, 10).map((seller: any) => (
+                  <tr key={seller.id} className="border-b border-white/3 table-row-hover">
+                    <td className="px-3 py-3">
+                      <p className="font-medium text-slate-200">{seller.name}</p>
+                      <p className="text-xs text-slate-600">/{seller.slug}</p>
+                    </td>
+                    <td className="px-3 py-3 font-semibold text-emerald-400">₦{(seller.sales30d ?? 0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-slate-300">{seller.orders30d} / {seller.totalOrders}</td>
+                    <td className="px-3 py-3 text-slate-300">{seller.activeProducts} active</td>
+                    <td className="px-3 py-3 text-amber-400 font-semibold">₦{(seller.wallet_balance ?? 0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-slate-300">{seller.withdrawalsCompleted} / {seller.withdrawalsRequested}</td>
+                    <td className="px-3 py-3 text-xs text-slate-500 whitespace-nowrap">
+                      {seller.lastOrderAt ? formatDistanceToNow(new Date(seller.lastOrderAt), { addSuffix: true }) : 'No orders'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

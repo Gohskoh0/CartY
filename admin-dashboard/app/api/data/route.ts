@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getOverviewStats, getMonthlyTrend, getRecentOrders, getActivityFeed, getUserGrowth,
   getAllUsers, getAllStores, getAllOrders, getRevenueData, getSubscriptionData, getAdCampaigns,
+  getFinancialSummary, getSellerActivity,
 } from '@/lib/data';
 
 export async function GET(req: NextRequest) {
@@ -10,10 +11,10 @@ export async function GET(req: NextRequest) {
   try {
     switch (page) {
       case 'overview': {
-        const [stats, trend, recentOrders, activityFeed, userGrowth] = await Promise.all([
-          getOverviewStats(), getMonthlyTrend(), getRecentOrders(8), getActivityFeed(), getUserGrowth(),
+        const [stats, trend, recentOrders, activityFeed, userGrowth, financials, sellerActivity] = await Promise.all([
+          getOverviewStats(), getMonthlyTrend(), getRecentOrders(8), getActivityFeed(), getUserGrowth(), getFinancialSummary(), getSellerActivity(),
         ]);
-        return NextResponse.json({ stats, trend, recentOrders, activityFeed, userGrowth });
+        return NextResponse.json({ stats, trend, recentOrders, activityFeed, userGrowth, financials, sellerActivity });
       }
       case 'users': {
         const [{ data: users, count }, growth] = await Promise.all([getAllUsers(0, 500), getUserGrowth()]);
@@ -28,8 +29,12 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ orders, count, trend });
       }
       case 'revenue': {
-        const [revenue, trend] = await Promise.all([getRevenueData(), getMonthlyTrend()]);
-        return NextResponse.json({ revenue, trend });
+        const [revenue, trend, financials, sellerActivity] = await Promise.all([getRevenueData(), getMonthlyTrend(), getFinancialSummary(), getSellerActivity()]);
+        return NextResponse.json({ revenue, trend, financials, sellerActivity });
+      }
+      case 'activity': {
+        const [activityFeed, sellerActivity] = await Promise.all([getActivityFeed(), getSellerActivity()]);
+        return NextResponse.json({ activityFeed, sellerActivity });
       }
       case 'subscriptions': {
         const data = await getSubscriptionData();

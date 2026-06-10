@@ -33,19 +33,12 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const userData = await login(phone, password);
+      await login(phone, password);
 
-      // backend login response may not include phone_verified; treat missing as verified
-      const phoneVerified = (userData as any)?.phone_verified;
-      if (phoneVerified === false) {
-        router.replace({
-          pathname: '/(auth)/verify-otp',
-          params: { phone: (userData as any).phone },
-        });
-        return;
-      }
-
+      // Phone verification disabled in launch mode.
       router.replace('/');
+
+
     } catch (error: any) {
       Alert.alert('Login Failed', error?.message || 'Invalid credentials');
     } finally {
@@ -132,7 +125,7 @@ export default function Login() {
             </Link>
 
             <View style={styles.footer}>
-              <Text style={styles.footerText}>Don't have an account? </Text>
+              <Text style={styles.footerText}>Don&apos;t have an account? </Text>
               <Link href="/(auth)/register" asChild>
                 <TouchableOpacity>
                   <Text style={styles.linkText}>Sign Up</Text>

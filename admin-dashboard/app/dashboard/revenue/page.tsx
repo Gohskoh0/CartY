@@ -1,20 +1,56 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Header from '@/components/Header';
 import StatCard from '@/components/StatCard';
+import DataTable, { StatusBadge } from '@/components/DataTable';
 import { RevenueAreaChart, DualBarChart } from '@/components/Charts';
-import { TrendingUp, Wallet, ArrowDownCircle, Store, BadgeDollarSign } from 'lucide-react';
+import { TrendingUp, Wallet, ArrowDownCircle, Store, BadgeDollarSign, CheckCircle2, XCircle } from 'lucide-react';
+import { format } from 'date-fns';
 
 export default function RevenuePage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  const loadRevenue = useCallback(async (showLoader = false) => {
+    if (showLoader) setLoading(true);
+    try {
+      const res = await fetch('/api/data?page=revenue');
+      const body = await res.json();
+      if (!body.error) setData(body);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetch('/api/data?page=revenue')
-      .then(r => r.json())
-      .then(d => { if (!d.error) setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
+    loadRevenue(true);
+  }, [loadRevenue]);
+
+  const updateWithdrawal = async (id: string, status: 'success' | 'failed') => {
+    const confirmed = window.confirm(
+      status === 'success'
+        ? 'Mark this withdrawal as paid? Do this only after you have manually sent the money.'
+        : 'Mark this withdrawal as failed and refund the seller wallet?'
+    );
+    if (!confirmed) return;
+
+    setActionLoading(`${id}:${status}`);
+    try {
+      const res = await fetch(`/api/withdrawals/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || 'Could not update withdrawal');
+      await loadRevenue();
+    } catch (err: any) {
+      window.alert(err?.message || 'Could not update withdrawal');
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   if (loading || !data) {
     return (
@@ -29,9 +65,89 @@ export default function RevenuePage() {
     );
   }
 
-  const { revenue, trend } = data;
-  const activeSubCount = revenue.topStores.length;
-  const subRevenue = activeSubCount * 7500;
+  const { revenue, trend, financials, sellerActivity } = data;
+  const subRevenue = financials.monthly.subscriptionRevenue;
+  const withdrawalRequests = revenue.withdrawalRequests ?? [];
+  const pendingRequests = withdrawalRequests.filter((w: any) => w.status === 'pending');
+  const getStore = (w: any) => Array.isArray(w.stores) ? w.stores[0] : w.stores;
+  const getOwner = (w: any) => {
+    const store = getStore(w);
+    return Array.isArray(store?.users) ? store.users[0] : store?.users;
+  };
+
+  const withdrawalColumns = [
+    {
+      key: 'seller',
+      label: 'Seller',
+      render: (w: any) => {
+        const store = getStore(w);
+        const owner = getOwner(w);
+        return (
+          <div>
+            <p className="font-medium text-slate-200">{store?.name || 'Unknown store'}</p>
+            <p className="text-xs text-slate-500 font-mono">{owner?.phone || store?.whatsapp_number || 'No phone'}</p>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'bank',
+      label: 'Bank Details',
+      render: (w: any) => (
+        <div>
+          <p className="font-medium text-slate-200">{w.bank_name || 'No bank'}</p>
+          <p className="text-xs text-slate-500">{w.bank_account_name || 'No account name'}</p>
+          <p className="text-xs text-slate-400 font-mono">{w.bank_account_number || 'No account number'}</p>
+        </div>
+      ),
+    },
+    {
+      key: 'amount',
+      label: 'Amount',
+      render: (w: any) => <span className="font-bold text-emerald-400">₦{(w.amount ?? 0).toLocaleString()}</span>,
+    },
+    {
+      key: 'created_at',
+      label: 'Requested',
+      render: (w: any) => <span className="text-slate-500 text-xs">{w.created_at ? format(new Date(w.created_at), 'dd MMM yyyy, HH:mm') : '—'}</span>,
+    },
+    {
+      key: 'reference',
+      label: 'Reference',
+      render: (w: any) => <span className="font-mono text-xs text-slate-500">{w.reference || '—'}</span>,
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (w: any) => <StatusBadge status={w.status} />,
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (w: any) => w.status === 'pending' ? (
+        <div className="flex gap-2">
+          <button
+            onClick={() => updateWithdrawal(w.id, 'success')}
+            disabled={!!actionLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 disabled:opacity-40 transition-colors"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Paid
+          </button>
+          <button
+            onClick={() => updateWithdrawal(w.id, 'failed')}
+            disabled={!!actionLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 disabled:opacity-40 transition-colors"
+          >
+            <XCircle className="w-3.5 h-3.5" />
+            Refund
+          </button>
+        </div>
+      ) : (
+        <span className="text-xs text-slate-600">Closed</span>
+      ),
+    },
+  ];
 
   return (
     <div className="min-h-full">
@@ -44,6 +160,45 @@ export default function RevenuePage() {
           <StatCard title="Total Withdrawn"  value={`₦${revenue.totalWithdrawn.toLocaleString()}`}        icon={<ArrowDownCircle className="w-5 h-5" />}  color="rose"    delay={0.1}  />
           <StatCard title="Pending Payouts"  value={`₦${revenue.pendingWithdrawals.toLocaleString()}`}    icon={<Wallet className="w-5 h-5" />}           color="amber"   delay={0.15} />
           <StatCard title="Top Stores"       value={revenue.topStores.length}                             icon={<Store className="w-5 h-5" />}            color="violet"  delay={0.2}  />
+        </div>
+
+        {/* Period revenue */}
+        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
+          {[
+            { label: 'Monthly App Revenue', value: `₦${financials.monthly.appRevenue.toLocaleString()}`, sub: 'subscriptions + ad margin' },
+            { label: 'Quarterly App Revenue', value: `₦${financials.quarterly.appRevenue.toLocaleString()}`, sub: 'quarter estimate' },
+            { label: 'Yearly App Revenue', value: `₦${financials.yearly.appRevenue.toLocaleString()}`, sub: 'year estimate' },
+            { label: 'Monthly Sales', value: `₦${financials.monthly.sales.toLocaleString()}`, sub: `${financials.monthly.orders} paid orders` },
+            { label: 'Seller Wallet Balance', value: `₦${financials.wallets.totalWalletBalance.toLocaleString()}`, sub: 'available to sellers' },
+            { label: 'Completed Withdrawals', value: financials.withdrawals.completed, sub: `₦${financials.withdrawals.completedAmount.toLocaleString()} paid manually` },
+          ].map((item) => (
+            <div key={item.label} className="glass rounded-2xl p-4 border border-white/5">
+              <p className="text-[11px] text-slate-500 uppercase tracking-wider font-semibold mb-2">{item.label}</p>
+              <p className="text-xl font-bold text-slate-100">{item.value}</p>
+              <p className="text-xs text-slate-600 mt-1">{item.sub}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Manual withdrawal queue */}
+        <div className="glass rounded-2xl p-5 border border-white/5">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
+            <div>
+              <h3 className="font-semibold text-slate-200">Manual Withdrawal Queue</h3>
+              <p className="text-xs text-slate-500 mt-1">Pay sellers outside Paystack, then mark the request as paid. Refund returns the held amount to the seller wallet.</p>
+            </div>
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-2 text-amber-300 text-sm font-semibold">
+              {pendingRequests.length} pending
+            </div>
+          </div>
+          <DataTable
+            columns={withdrawalColumns}
+            data={withdrawalRequests}
+            searchFields={['reference', 'bank_name', 'bank_account_name', 'bank_account_number']}
+            searchPlaceholder="Search withdrawals..."
+            pageSize={10}
+            emptyMessage="No withdrawal requests yet"
+          />
         </div>
 
         {/* Charts */}
@@ -107,12 +262,41 @@ export default function RevenuePage() {
           )}
         </div>
 
+        {/* Seller wallet activity */}
+        <div className="glass rounded-2xl p-5 border border-white/5">
+          <h3 className="font-semibold text-slate-200 mb-5">Seller Wallets and Activity</h3>
+          <div className="space-y-3">
+            {(sellerActivity ?? []).slice(0, 8).map((seller: any) => (
+              <div key={seller.id} className="flex flex-col md:flex-row md:items-center gap-3 justify-between border-b border-white/5 pb-3 last:border-0 last:pb-0">
+                <div>
+                  <p className="font-medium text-slate-200">{seller.name}</p>
+                  <p className="text-xs text-slate-600">/{seller.slug} · {seller.orders30d} orders in 30 days</p>
+                </div>
+                <div className="grid grid-cols-3 gap-4 text-right">
+                  <div>
+                    <p className="text-xs text-slate-500">30d sales</p>
+                    <p className="text-sm font-semibold text-emerald-400">₦{(seller.sales30d ?? 0).toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Wallet</p>
+                    <p className="text-sm font-semibold text-amber-400">₦{(seller.wallet_balance ?? 0).toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Withdrawals</p>
+                    <p className="text-sm font-semibold text-slate-300">{seller.withdrawalsCompleted}/{seller.withdrawalsRequested}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Withdrawal summary */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[
             { label: 'Total GMV', value: `₦${revenue.gmv.toLocaleString()}`, sub: 'All paid orders combined', color: 'border-indigo-500/20 bg-indigo-500/5' },
-            { label: 'Successfully Withdrawn', value: `₦${revenue.totalWithdrawn.toLocaleString()}`, sub: 'Confirmed bank transfers', color: 'border-emerald-500/20 bg-emerald-500/5' },
-            { label: 'Pending Payouts', value: `₦${revenue.pendingWithdrawals.toLocaleString()}`, sub: 'Awaiting processing', color: 'border-amber-500/20 bg-amber-500/5' },
+            { label: 'Successfully Withdrawn', value: `₦${revenue.totalWithdrawn.toLocaleString()}`, sub: 'Confirmed manual payouts', color: 'border-emerald-500/20 bg-emerald-500/5' },
+            { label: 'Pending Payouts', value: `₦${revenue.pendingWithdrawals.toLocaleString()}`, sub: 'Awaiting manual processing', color: 'border-amber-500/20 bg-amber-500/5' },
           ].map(({ label, value, sub, color }) => (
             <div key={label} className={`glass rounded-2xl p-5 border ${color}`}>
               <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-2">{label}</p>

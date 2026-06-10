@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS stores (
   bank_code TEXT,
   bank_name TEXT,
   bank_account_number TEXT,
+  bank_account_name TEXT,
   bank_recipient_code TEXT,
   -- Ad account connections
   meta_access_token TEXT,
@@ -110,11 +111,19 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   store_id UUID REFERENCES stores(id) ON DELETE CASCADE,
   amount FLOAT NOT NULL,
   status TEXT DEFAULT 'pending',  -- 'pending' | 'success' | 'failed'
+  reference TEXT UNIQUE,
+  bank_code TEXT,
+  bank_name TEXT,
+  bank_account_number TEXT,
+  bank_account_name TEXT,
   transfer_code TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
+  admin_note TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_withdrawals_store_id ON withdrawals(store_id);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status);
 
 -- ==================== PENDING SUBSCRIPTIONS ====================
 

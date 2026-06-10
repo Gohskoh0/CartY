@@ -1,10 +1,18 @@
-- [x] Reviewed repo flow hotspots (backend auth/payment + mobile checkout)
-- [x] Fixed mobile checkout payload product_id to use UUID `product.id` (not `_id`)
-- [x] Hardened login redirect to OTP when `phone_verified` is missing from login response
-- [x] Updated Render `render.yaml` env var notes / ensured JWT_SECRET wiring and preserved required keys
-- [ ] Verify `backend/server.py` startup block after tampering (CORS + fail-fast secrets)
+# TODO
 
-- [ ] Commit code fixes
-- [ ] Run Expo Go install/test on device using dev server (no production publish)
-- [ ] After successful device test, deploy backend + update any webhook/callback URLs if needed
+## Goal
+Fix:
+1) Storefront products not displaying after signout/signin
+2) Implement 1-month free trial popup + continue button that activates trial without breaking payments
+3) Store sharing link WhatsApp preview shows product image (not raw URL)
+
+## Steps
+- [x] Step 1: Inspect relevant frontend auth/register flow
+- [x] Step 2: Inspect storefront routing/remount behavior and fix re-fetch logic
+- [ ] Step 3: Add/confirm backend trial activation endpoint + ensure subscription_status=active with consistent expiry field
+- [ ] Step 4: Implement frontend popup after signup; Continue button calls trial activation/ensures store exists
+
+- [ ] Step 5: Update backend storefront HTML with OpenGraph meta tags including og:image from first active product
+- [ ] Step 6: Ensure payments during trial are allowed (subscription_status remains active)
+- [ ] Step 7: Run quick smoke tests (signup→popup→continue, signout/signin→storefront, WhatsApp preview)
 

@@ -2,8 +2,8 @@ import React, { useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Platform, Animated,
 } from 'react-native';
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 import { Ionicons } from '@expo/vector-icons';
+
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 
@@ -27,7 +27,8 @@ function TabItem({ route, isActive, onPress }: { route: any; isActive: boolean; 
       tension: 120,
       friction: 8,
     }).start();
-  }, [isActive]);
+  }, [isActive, scale]);
+
 
   return (
     <TouchableOpacity style={styles.tabItem} onPress={onPress} activeOpacity={0.7}>
